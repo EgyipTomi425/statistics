@@ -7,6 +7,7 @@ module;
 #include <cublas_v2.h>
 
 export module statistics;
+export import statistics.helper;
 
 export namespace statistics
 {
@@ -15,10 +16,11 @@ export namespace statistics
         std::cout << "Hello Statistics!" << std::endl;
     }
 
-    std::vector<float> cuda_matmul(
-        const std::vector<float>& A,
-        const std::vector<float>& B,
-        int M, int K, int N)
+    std::vector<float> cuda_matmul_row_major
+    (
+    const std::vector<float>& A,
+    const std::vector<float>& B,
+    int M, int K, int N)
     {
         if (A.size() != M * K || B.size() != K * N)
             throw std::runtime_error("Invalid matrix sizes!");
@@ -26,7 +28,6 @@ export namespace statistics
         std::vector<float> C(M * N);
 
         float *dA, *dB, *dC;
-
         cudaMalloc(&dA, A.size() * sizeof(float));
         cudaMalloc(&dB, B.size() * sizeof(float));
         cudaMalloc(&dC, C.size() * sizeof(float));
@@ -44,9 +45,7 @@ export namespace statistics
         (
             handle,
             CUBLAS_OP_N, CUBLAS_OP_N,
-            N,
-            M,
-            K,
+            N, M, K,
             &alpha,
             dB, N,
             dA, K,
@@ -63,4 +62,5 @@ export namespace statistics
 
         return C;
     }
+
 }

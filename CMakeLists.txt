@@ -9,13 +9,15 @@ target_sources(statistics
         PUBLIC
         FILE_SET CXX_MODULES FILES
             stat.cppm
+            stat_helper.cppm
 )
 
 if(DISCORD)
     target_sources(statistics
             PUBLIC
             FILE_SET CXX_MODULES FILES
-            discord_init.cppm
+                discord_commands.cppm
+                discord_init.cppm
     )
     target_link_libraries(statistics PUBLIC echterwachter)
 endif()
