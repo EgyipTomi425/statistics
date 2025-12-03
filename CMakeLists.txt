@@ -2,11 +2,23 @@ add_library(statistics)
 
 find_package(CUDAToolkit REQUIRED)
 
+message(STATUS "STATISTICS = ${STATISTICS}")
+message(STATUS "DISCORD = ${DISCORD}")
+
 target_sources(statistics
         PUBLIC
         FILE_SET CXX_MODULES FILES
-            statistics.cppm
+            stat.cppm
 )
+
+if(DISCORD)
+    target_sources(statistics
+            PUBLIC
+            FILE_SET CXX_MODULES FILES
+            discord_init.cppm
+    )
+    target_link_libraries(statistics PUBLIC echterwachter)
+endif()
 
 target_link_libraries(statistics
         PUBLIC
