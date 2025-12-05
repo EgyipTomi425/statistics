@@ -12,6 +12,18 @@ export import echterwachter;
 export int add123()
 {return 123;}
 
+export void pca_cmd(const dpp::slashcommand_t& event)
+{
+    dc_download_text(event, "csv", [event](const std::string& content, const dpp::attachment& file)
+    {
+        std::stringstream ss;
+        ss << "Filename: " << file.filename << "\n";
+        ss << "Size: " << file.size << " bytes\n";
+        ss << "Content:\n" << content << "\n";
+        event.reply(ss.str());
+    });
+}
+
 export void matmul_r(const dpp::slashcommand_t& event)
 {
     try

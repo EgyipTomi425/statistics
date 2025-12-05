@@ -21,7 +21,7 @@ export namespace statistics::helper
         std::istringstream iss(cleaned);
         std::vector<float> vec;
         float val;
-        while (iss >> val) vec.push_back(val);
+        while (iss >> val) vec.emplace_back(val);
 
         return vec;
     }

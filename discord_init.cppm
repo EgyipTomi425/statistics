@@ -31,6 +31,14 @@ export inline const int init_statistics = []
             int_param("k", "Number of columns of first matrix", false),
             int_param("n", "Number of columns of second matrix", false),
             int_param("precision", "Number of decimal places", false)
+        ),
+        "pca",
+        "Process CSV in memory and return the input matrix (no PCA)",
+        pca_cmd,
+        params
+        (
+            file_param("csv", "CSV file upload"),
+            int_param("scale", "0=no scale, 1=scale (optional)", false)
         )
     );
 
