@@ -30,6 +30,11 @@ export void pca_cmd(const dpp::slashcommand_t& event)
         ss << "\nMatrix (" << r.rows << " x " << r.cols << "):\n";
         ss << statistics::helper::matrix_to_string(r.matrix, r.rows, r.cols);
 
+        std::vector<float> rT = statistics::helper::matrix_transpose(r.matrix, r.rows, r.cols);
+
+        ss << "\nMatrix Transpose (" << r.rows << " x " << r.rows << "):\n";
+        ss << statistics::helper::matrix_to_string(rT, r.cols, r.rows);
+
         event.reply(ss.str());
     });
 }

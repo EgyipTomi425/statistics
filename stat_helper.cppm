@@ -8,6 +8,15 @@ export module statistics.helper;
 
 export namespace statistics::helper
 {
+    std::vector<float> matrix_transpose(const std::vector<float>& mat, int rows, int cols)
+    {
+        std::vector<float> t(cols * rows);
+        for (int i = 0; i < rows; ++i)
+            for (int j = 0; j < cols; ++j)
+                t[j * rows + i] = mat[i * cols + j];
+        return t;
+    }
+
     std::vector<float> parse_matrix_string(const std::string& input)
     {
         std::string cleaned;
