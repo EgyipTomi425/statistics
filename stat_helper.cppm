@@ -2,6 +2,7 @@ module;
 
 #include <vector>
 #include <sstream>
+#include <unordered_map>
 
 export module statistics.helper;
 
@@ -40,4 +41,64 @@ export namespace statistics::helper
         }
         return oss.str();
     }
+
+    struct CSVResult
+    {
+        std::vector<std::string> header;
+        std::vector<float> matrix;
+        int rows;
+        int cols;
+    };
+
+    CSVResult parse_csv(const std::string& text)
+    {
+        CSVResult result;
+        if (text.empty()) return result;
+
+        std::istringstream iss(text);
+        std::string header_line;
+        if (!std::getline(iss, header_line)) return result;
+
+        std::unordered_map<char, int> freq;
+        for (char c : header_line)
+        {
+            if (!(std::isalpha(static_cast<unsigned char>(c))))
+                freq[c]++;
+        }
+
+        char sep = ',';
+        int best = -1;
+        for (auto& kv : freq)
+        {
+            if (kv.second > best)
+            {
+                best = kv.second;
+                sep = kv.first;
+            }
+        }
+
+        {
+            std::string field;
+            std::istringstream hs(header_line);
+            while (std::getline(hs, field, sep))
+                result.header.push_back(field);
+        }
+
+        std::string line;
+        while (std::getline(iss, line))
+        {
+            if (line.empty()) continue;
+            std::vector<float> row = parse_matrix_string(line);
+            result.matrix.insert(result.matrix.end(), row.begin(), row.end());
+        }
+
+        result.cols = static_cast<int>(result.header.size());
+        if (result.cols > 0)
+            result.rows = static_cast<int>(result.matrix.size() / result.cols);
+        else
+            result.rows = 0;
+
+        return result;
+    }
+
 }

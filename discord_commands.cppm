@@ -16,10 +16,20 @@ export void pca_cmd(const dpp::slashcommand_t& event)
 {
     dc_download_text(event, "csv", [event](const std::string& content, const dpp::attachment& file)
     {
-        std::stringstream ss;
-        ss << "Filename: " << file.filename << "\n";
+        statistics::helper::CSVResult r = statistics::helper::parse_csv(content);
+
+        std::ostringstream ss;
+        ss << "Header fields:\n";
+        for (const std::string& h : r.header) ss << h << " ";
+
+        ss << "\nFilename: " << file.filename << "\n";
         ss << "Size: " << file.size << " bytes\n";
-        ss << "Content:\n" << content << "\n";
+        ss << "Content-Type: " << file.content_type << "\n";
+        ss << "URL: " << file.url << "\n\n";
+
+        ss << "\nMatrix (" << r.rows << " x " << r.cols << "):\n";
+        ss << statistics::helper::matrix_to_string(r.matrix, r.rows, r.cols);
+
         event.reply(ss.str());
     });
 }
