@@ -3,6 +3,8 @@ module;
 #include <dpp/dpp.h>
 #include <stdexcept>
 #include <variant>
+#include <iomanip>
+#include "statistics_cuda.h"
 
 export module statistics_dc.commands;
 
@@ -103,7 +105,34 @@ export void matmul_r(const dpp::slashcommand_t& event)
 
 export void stat_ping(const dpp::slashcommand_t& event)
 {
-    event.reply("42");
+    using namespace std::chrono;
+
+    std::vector<float> v(10'000'000);
+    for (auto& x : v)
+        x = (std::rand() / (float)RAND_MAX) * 20.0f - 10.0f;
+
+    auto cpu_start = high_resolution_clock::now();
+    float cpu_result = statistics::cuda::cpu_sum_vector(v);
+    auto cpu_end = high_resolution_clock::now();
+    auto cpu_ms = duration_cast<microseconds>(cpu_end - cpu_start).count() / 1000.0;
+
+    auto cuda_start = high_resolution_clock::now();
+    float cuda_result = statistics::cuda::cuda_sum_vector(v);
+    auto cuda_end = high_resolution_clock::now();
+    auto cuda_ms = duration_cast<microseconds>(cuda_end - cuda_start).count() / 1000.0;
+
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(3);
+
+    ss << "**Statistics Ping**\n\n"
+       << "**Vector size:** " << v.size() << "\n\n"
+       << "**CPU sum:** " << static_cast<double>(cpu_result) << "\n"
+       << "**CPU time:** " << cpu_ms << " ms\n\n"
+       << "**CUDA sum:** " << static_cast<double>(cuda_result) << "\n"
+       << "**CUDA time:** " << cuda_ms << " ms\n\n"
+       << "**Speedup:** x" << std::fixed << std::setprecision(3) << (cpu_ms / cuda_ms);
+
+    event.reply(ss.str());
 }
 
 export void stat_ping2(const dpp::slashcommand_t& event)
