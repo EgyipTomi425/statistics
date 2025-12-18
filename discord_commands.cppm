@@ -18,25 +18,9 @@ export void pca_cmd(const dpp::slashcommand_t& event)
 {
     dc_download_text(event, "csv", [event](const std::string& content, const dpp::attachment& file)
     {
-        statistics::helper::CSVResult r = statistics::helper::parse_csv(content);
-
-        std::ostringstream ss;
-        ss << "Header fields:\n";
-        for (const std::string& h : r.header) ss << h << " ";
-
-        ss << "\nFilename: " << file.filename << "\n";
-        ss << "Size: " << file.size << " bytes\n";
-        ss << "Content-Type: " << file.content_type << "\n";
-        ss << "URL: " << file.url << "\n\n";
-
-        ss << "\nMatrix (" << r.rows << " x " << r.cols << "):\n";
-        ss << statistics::helper::matrix_to_string(r.matrix, r.rows, r.cols);
-
-        std::vector<float> rT = statistics::helper::matrix_transpose(r.matrix, r.rows, r.cols);
-
-        ss << "\nMatrix Transpose (" << r.rows << " x " << r.rows << "):\n";
-        ss << statistics::helper::matrix_to_string(rT, r.cols, r.rows);
-
+        auto r = statistics::helper::parse_csv(content);
+        std::stringstream ss;
+        ss << r;
         event.reply(ss.str());
     });
 }
@@ -105,34 +89,7 @@ export void matmul_r(const dpp::slashcommand_t& event)
 
 export void stat_ping(const dpp::slashcommand_t& event)
 {
-    using namespace std::chrono;
-
-    std::vector<float> v(10'000'000);
-    for (auto& x : v)
-        x = (std::rand() / (float)RAND_MAX) * 20.0f - 10.0f;
-
-    auto cpu_start = high_resolution_clock::now();
-    float cpu_result = statistics::cuda::cpu_sum_vector(v);
-    auto cpu_end = high_resolution_clock::now();
-    auto cpu_ms = duration_cast<microseconds>(cpu_end - cpu_start).count() / 1000.0;
-
-    auto cuda_start = high_resolution_clock::now();
-    float cuda_result = statistics::cuda::cuda_sum_vector(v);
-    auto cuda_end = high_resolution_clock::now();
-    auto cuda_ms = duration_cast<microseconds>(cuda_end - cuda_start).count() / 1000.0;
-
-    std::ostringstream ss;
-    ss << std::fixed << std::setprecision(3);
-
-    ss << "**Statistics Ping**\n\n"
-       << "**Vector size:** " << v.size() << "\n\n"
-       << "**CPU sum:** " << static_cast<double>(cpu_result) << "\n"
-       << "**CPU time:** " << cpu_ms << " ms\n\n"
-       << "**CUDA sum:** " << static_cast<double>(cuda_result) << "\n"
-       << "**CUDA time:** " << cuda_ms << " ms\n\n"
-       << "**Speedup:** x" << std::fixed << std::setprecision(3) << (cpu_ms / cuda_ms);
-
-    event.reply(ss.str());
+    event.reply("42");
 }
 
 export void stat_ping2(const dpp::slashcommand_t& event)

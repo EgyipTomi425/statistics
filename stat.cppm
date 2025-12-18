@@ -62,5 +62,4 @@ export namespace statistics
 
         return C;
     }
-
 }

@@ -1,5 +1,6 @@
 module;
 
+#include <iostream>
 #include <vector>
 #include <sstream>
 #include <unordered_map>
@@ -8,6 +9,13 @@ export module statistics.helper;
 
 export namespace statistics::helper
 {
+    inline bool try_parse_float(const std::string& s, float& out)
+    {
+        char* end = nullptr;
+        out = std::strtof(s.c_str(), &end);
+        return end != s.c_str() && *end == '\0';
+    }
+
     std::vector<float> matrix_transpose(const std::vector<float>& mat, int rows, int cols)
     {
         std::vector<float> t(cols * rows);
@@ -54,10 +62,71 @@ export namespace statistics::helper
     struct CSVResult
     {
         std::vector<std::string> header;
+
         std::vector<float> matrix;
-        int rows;
-        int cols;
+        int rows = 0;
+        int cols = 0;
+
+        std::vector<int> categorical_cols;
+        std::vector<std::vector<std::string>> categorical_data;
     };
+
+    inline std::ostream& operator<<(std::ostream& os, const CSVResult& r)
+    {
+        constexpr int MAX_ROWS = 10;
+        const int rows_to_print = std::min(r.rows, MAX_ROWS);
+
+        const int num_numeric = r.cols;
+        const int num_categorical = static_cast<int>(r.categorical_cols.size());
+        const int total_cols = num_numeric + num_categorical;
+
+        os << "CSV summary\n";
+        os << "Rows: " << r.rows << "\n";
+        os << "Columns: " << total_cols
+           << " (numeric: " << num_numeric
+           << ", categorical: " << num_categorical << ")\n\n";
+
+        os << "Numeric columns (" << num_numeric << "):\n";
+        for (int i = 0; i < num_numeric; ++i)
+            os << r.header[i] << " ";
+        os << "\n\n";
+
+        if (num_categorical > 0)
+        {
+            os << "Categorical columns (" << num_categorical << "):\n";
+            for (int idx : r.categorical_cols)
+                os << r.header[idx] << " ";
+            os << "\n\n";
+        }
+
+        os << "First " << rows_to_print << " rows:\n";
+
+        for (int i = 0; i < rows_to_print; ++i)
+        {
+            for (int j = 0; j < num_numeric; ++j)
+            {
+                os << r.matrix[i * num_numeric + j] << " ";
+            }
+
+            for (size_t k = 0; k < r.categorical_cols.size(); ++k)
+            {
+                if (i < static_cast<int>(r.categorical_data[k].size()))
+                    os << r.categorical_data[k][i] << " ";
+                else
+                    os << "? ";
+            }
+
+            os << "\n";
+        }
+
+        if (r.rows > MAX_ROWS)
+        {
+            os << "... (" << (r.rows - MAX_ROWS)
+               << " more rows not shown)\n";
+        }
+
+        return os;
+    }
 
     CSVResult parse_csv(const std::string& text)
     {
@@ -65,49 +134,63 @@ export namespace statistics::helper
         if (text.empty()) return result;
 
         std::istringstream iss(text);
-        std::string header_line;
-        if (!std::getline(iss, header_line)) return result;
+        std::string line;
 
-        std::unordered_map<char, int> freq;
-        for (char c : header_line)
-        {
-            if (!(std::isalpha(static_cast<unsigned char>(c))))
-                freq[c]++;
-        }
+        if (!std::getline(iss, line)) return result;
 
         char sep = ',';
-        int best = -1;
-        for (auto& kv : freq)
-        {
-            if (kv.second > best)
-            {
-                best = kv.second;
-                sep = kv.first;
-            }
-        }
 
         {
             std::string field;
-            std::istringstream hs(header_line);
+            std::istringstream hs(line);
             while (std::getline(hs, field, sep))
-                result.header.push_back(field);
+                result.header.emplace_back(field);
         }
 
-        std::string line;
+        const int total_cols = static_cast<int>(result.header.size());
+        std::vector<bool> is_numeric(total_cols, true);
+        std::vector<std::vector<std::string>> categorical_tmp(total_cols);
+
         while (std::getline(iss, line))
         {
             if (line.empty()) continue;
-            std::vector<float> row = parse_matrix_string(line);
-            result.matrix.insert(result.matrix.end(), row.begin(), row.end());
+
+            std::istringstream ls(line);
+            std::string field;
+            int col = 0;
+
+            while (std::getline(ls, field, sep) && col < total_cols)
+            {
+                float val;
+                if (is_numeric[col] && try_parse_float(field, val))
+                {
+                    result.matrix.emplace_back(val);
+                }
+                else
+                {
+                    is_numeric[col] = false;
+                    categorical_tmp[col].emplace_back(field);
+                }
+                ++col;
+            }
+
+            ++result.rows;
         }
 
-        result.cols = static_cast<int>(result.header.size());
-        if (result.cols > 0)
-            result.rows = static_cast<int>(result.matrix.size() / result.cols);
-        else
-            result.rows = 0;
+        for (int c = 0; c < total_cols; ++c)
+        {
+            if (!is_numeric[c])
+            {
+                result.categorical_cols.emplace_back(c);
+                result.categorical_data.emplace_back(
+                    std::move(categorical_tmp[c])
+                );
+            }
+        }
+
+        result.cols =
+            total_cols - static_cast<int>(result.categorical_cols.size());
 
         return result;
     }
-
 }
