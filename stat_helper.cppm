@@ -116,7 +116,7 @@ export namespace statistics::helper
                     os << "? ";
             }
 
-            os << "\n";
+            //os << "\n";
         }
 
         if (r.rows > MAX_ROWS)

@@ -35,6 +35,8 @@ target_sources(statistics
         FILE_SET CXX_MODULES FILES
             stat.cppm
             stat_helper.cppm
+        PRIVATE
+            stat.cpp
 )
 
 if(DISCORD)
@@ -46,6 +48,10 @@ if(DISCORD)
     )
     target_link_libraries(statistics PUBLIC echterwachter)
 endif()
+
+set_target_properties(statistics_cuda_lib PROPERTIES
+        CUDA_RUNTIME_LIBRARY Shared
+)
 
 target_link_libraries(statistics
         PUBLIC

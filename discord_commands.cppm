@@ -19,8 +19,9 @@ export void pca_cmd(const dpp::slashcommand_t& event)
     dc_download_text(event, "csv", [event](const std::string& content, const dpp::attachment& file)
     {
         auto r = statistics::helper::parse_csv(content);
+        std::vector centralized_matrix = statistics::centralize(r.matrix, r.rows, r.cols);
         std::stringstream ss;
-        ss << r;
+        ss << r << std::endl << statistics::helper::matrix_to_string(centralized_matrix, r.rows, r.cols);
         event.reply(ss.str());
     });
 }
