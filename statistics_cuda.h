@@ -17,20 +17,9 @@ namespace statistics::cuda
     LaunchConfig get_thread_config();
     std::ostream& operator<<(std::ostream& os, const LaunchConfig& cfg);
 
-    void column_mean
-    (
-        const float* dX,
-        float* dMean,
-        int rows,
-        int cols
-    );
+    void column_mean(const float* dX, float* dMean, int rows, int cols);
 
-    void centralize
-    (
-        const float* dX,
-        float* dOut,
-        const float* dMean,
-        int rows,
-        int cols
-    );
+    void centralize(const float* dX, float* dOut, const float* dMean, int rows, int cols);
+
+    void pca(const float* dX, float* dOut, int rows, int cols);
 }

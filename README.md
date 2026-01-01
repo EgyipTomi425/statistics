@@ -31,6 +31,13 @@ Device 0: NVIDIA GeForce RTX 3050 Laptop GPU
   Managed Memory: 1
   Concurrent Managed Access: 0
   Pageable Memory Access: 0
+  
+  LaunchConfig:
+    threads_per_block:   512
+    max_blocks:          48
+    shared_per_block:   34133 bytes
+    shared_per_thread:   66 bytes
+    regs_per_thread:     128
 ----------------------------------------
 ```
 

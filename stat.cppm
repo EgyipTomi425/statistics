@@ -21,7 +21,7 @@ export namespace statistics
         int M, int K, int N
     );
 
-    std::vector<float> centralize
+    std::vector<float> pca
     (
         const std::vector<float>& X,
         int rows,

@@ -116,7 +116,7 @@ export namespace statistics::helper
                     os << "? ";
             }
 
-            //os << "\n";
+            os << "\n";
         }
 
         if (r.rows > MAX_ROWS)
@@ -126,6 +126,14 @@ export namespace statistics::helper
         }
 
         return os;
+    }
+
+    inline std::string trim(const std::string& s)
+    {
+        size_t start = s.find_first_not_of(" \t\r");
+        if (start == std::string::npos) return "";
+        size_t end = s.find_last_not_of(" \t\r");
+        return s.substr(start, end - start + 1);
     }
 
     CSVResult parse_csv(const std::string& text)
@@ -144,7 +152,7 @@ export namespace statistics::helper
             std::string field;
             std::istringstream hs(line);
             while (std::getline(hs, field, sep))
-                result.header.emplace_back(field);
+                result.header.emplace_back(trim(field));
         }
 
         const int total_cols = static_cast<int>(result.header.size());
@@ -161,6 +169,8 @@ export namespace statistics::helper
 
             while (std::getline(ls, field, sep) && col < total_cols)
             {
+                field = trim(field);
+
                 float val;
                 if (is_numeric[col] && try_parse_float(field, val))
                 {

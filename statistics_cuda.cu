@@ -122,15 +122,28 @@ namespace statistics::cuda
 
     void column_mean(const float* dX, float* dMean, int rows, int cols)
     {
-        //
+
     }
 
-    void centralize
-    (
-        const float* dX, float* dOut,
-        const float* dMean, int rows, int cols
-    )
+    void centralize(const float* dX, float* dOut, const float* dMean, int rows, int cols)
     {
-        //
+
+    }
+
+    void pca(const float* dX, float* dOut, int rows, int cols)
+    {
+        float* dMean = nullptr;
+        cudaError_t err;
+
+        dMean = nullptr;
+        err = cudaMalloc(&dMean, cols * sizeof(float));
+        if (err != cudaSuccess)
+            throw std::runtime_error("cudaMalloc failed for dMean");
+
+        column_mean(dX, dMean, rows, cols);
+
+        centralize(dX, dOut, dMean, rows, cols);
+
+        cudaFree(dMean);
     }
 }

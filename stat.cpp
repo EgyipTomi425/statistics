@@ -64,15 +64,42 @@ namespace statistics
         return C;
     }
 
-    std::vector<float> centralize
-    (
-        const std::vector<float>& X,
-        int rows, int cols
-    )
+    std::vector<float> pca(const std::vector<float>& X, int rows, int cols)
     {
-        statistics::cuda::print_device_info();
-        auto a = statistics::cuda::get_thread_config();
-        std::cout << a << std::endl;
-        return X;
+        std::vector<float> result(rows * cols);
+
+        float* dX = nullptr;
+        float* dOut = nullptr;
+
+        cudaError_t err = cudaMalloc(&dX, X.size() * sizeof(float));
+        if (err != cudaSuccess)
+            throw std::runtime_error("cudaMalloc failed for dX");
+
+        err = cudaMalloc(&dOut, result.size() * sizeof(float));
+        if (err != cudaSuccess)
+        {
+            cudaFree(dX);
+            throw std::runtime_error("cudaMalloc failed for dOut");
+        }
+
+        err = cudaMemcpy(dX, X.data(), X.size() * sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess)
+        {
+            cudaFree(dX);
+            cudaFree(dOut);
+            throw std::runtime_error("cudaMemcpy H2D failed");
+        }
+
+        statistics::cuda::pca(dX, dOut, rows, cols);
+
+        err = cudaMemcpy(result.data(), dOut, result.size() * sizeof(float), cudaMemcpyDeviceToHost);
+
+        cudaFree(dX);
+        cudaFree(dOut);
+
+        if (err != cudaSuccess)
+            throw std::runtime_error("cudaMemcpy D2H failed");
+
+        return result;
     }
 }
