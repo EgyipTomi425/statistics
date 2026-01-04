@@ -51,7 +51,16 @@ namespace statistics::cuda
         int cols
     )
     {
-        //
+        int col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (col >= cols) return;
+
+        float sum = 0.0f;
+        for (int r = 0; r < rows; ++r)
+        {
+            sum += X[r * cols + col];
+        }
+
+        mean[col] = sum / rows;
     }
 
     __global__ void centralize_kernel
@@ -122,7 +131,25 @@ namespace statistics::cuda
 
     void column_mean(const float* dX, float* dMean, int rows, int cols)
     {
+        LaunchConfig cfg = get_thread_config();
 
+        int threads = std::min(cfg.threads_per_block, cols);
+        int blocks = (cols + threads - 1) / threads;
+
+        std::cout << "Kernel parameters: blocks: " << blocks << " threads: " << threads << std::endl;
+        column_mean_kernel<<<blocks, threads>>>(dX, dMean, rows, cols);
+
+        cudaError_t err = cudaDeviceSynchronize();
+        if (err != cudaSuccess)
+            throw std::runtime_error(std::string("CUDA error in column_mean_kernel: ") + cudaGetErrorString(err));
+
+        float* hMean = new float[cols];
+        cudaMemcpy(hMean, dMean, cols * sizeof(float), cudaMemcpyDeviceToHost);
+
+        for(int c = 0; c < cols; ++c)
+            std::cout << "Column " << c << " mean: " << hMean[c] << std::endl;
+
+        delete[] hMean;
     }
 
     void centralize(const float* dX, float* dOut, const float* dMean, int rows, int cols)
@@ -133,12 +160,10 @@ namespace statistics::cuda
     void pca(const float* dX, float* dOut, int rows, int cols)
     {
         float* dMean = nullptr;
-        cudaError_t err;
 
-        dMean = nullptr;
-        err = cudaMalloc(&dMean, cols * sizeof(float));
+        cudaError_t err = cudaMalloc(&dMean, cols * sizeof(float));
         if (err != cudaSuccess)
-            throw std::runtime_error("cudaMalloc failed for dMean");
+            throw std::runtime_error("CudaMalloc failed for dMean");
 
         column_mean(dX, dMean, rows, cols);
 

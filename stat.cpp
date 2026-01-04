@@ -91,7 +91,6 @@ namespace statistics
         }
 
         statistics::cuda::pca(dX, dOut, rows, cols);
-
         err = cudaMemcpy(result.data(), dOut, result.size() * sizeof(float), cudaMemcpyDeviceToHost);
 
         cudaFree(dX);
