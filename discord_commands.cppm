@@ -4,6 +4,8 @@ module;
 #include <stdexcept>
 #include <variant>
 #include <iomanip>
+#include <random>
+
 #include "statistics_cuda.h"
 
 export module statistics_dc.commands;
@@ -13,6 +15,32 @@ export import echterwachter;
 
 export int add123()
 {return 123;}
+
+std::vector<float> generate_random_matrix
+(
+    int rows,
+    int cols
+)
+{
+    std::vector<float> mat(rows * cols);
+
+    std::mt19937 rng(std::random_device{}());
+
+    for (int c = 0; c < cols; ++c)
+    {
+        float min_val = -float(c + 1);
+        float max_val =  2.0f * float(c + 1);
+
+        std::uniform_real_distribution<float> dist(min_val, max_val);
+
+        for (int r = 0; r < rows; ++r)
+        {
+            mat[r * cols + c] = dist(rng);
+        }
+    }
+
+    return mat;
+}
 
 export void pca_cmd(const dpp::slashcommand_t& event)
 {
@@ -91,6 +119,16 @@ export void matmul_r(const dpp::slashcommand_t& event)
 export void stat_ping(const dpp::slashcommand_t& event)
 {
     event.reply("42");
+
+    for (int i = 100'000; i <= 100'000; i += 100'000)
+    {
+        int rows1 = i;
+        constexpr int cols1 = 10;
+        std::cout << std:: endl << i << " rows, " << cols1 << " 10 cols" << std::endl;
+        auto matrix1 = generate_random_matrix(rows1, cols1);
+        std::vector pca_matrix = statistics::pca(matrix1,rows1, cols1);
+        std::cout << std::endl << std::endl;
+    }
 }
 
 export void stat_ping2(const dpp::slashcommand_t& event)

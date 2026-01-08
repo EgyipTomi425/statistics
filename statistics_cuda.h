@@ -21,5 +21,7 @@ namespace statistics::cuda
 
     void centralize(const float* dX, float* dOut, const float* dMean, int rows, int cols);
 
-    void pca(const float* dX, float* dOut, int rows, int cols);
+    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result = true);
+
+    void column_stats_cpu(const float* hX, int rows, int cols);
 }
