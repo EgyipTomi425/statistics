@@ -129,6 +129,7 @@ namespace statistics::cuda
         }
     }
 
+    // Call with the same BlockDim
     template <bool ComputeVariance = false>
     __global__ void column_reduce_kernel
     (
@@ -139,50 +140,53 @@ namespace statistics::cuda
         float* __restrict__ dVariance
     )
     {
-        int col = threadIdx.x;
-        if (col >= cols) return;
-
-        float meanA = 0.0f;
-        float M2A   = 0.0f;
-        int   nA    = 0;
+        int tid = threadIdx.x;
+        int stride_cols = blockDim.x;
 
         int stride = (ComputeVariance ? 3 : 2);
 
-        for (int b = 0; b < blocks; ++b)
+        for (int col = tid; col < cols; col += stride_cols)
         {
-            int off = b * cols * stride + col * stride;
+            float meanA = 0.0f;
+            float M2A   = 0.0f;
+            int   nA    = 0;
 
-            float meanB = cache[off + 0];
-            int   nB    = (int)cache[off + stride - 1];
-            if (nB == 0) continue;
-
-            if (nA == 0)
+            for (int b = 0; b < blocks; ++b)
             {
-                meanA = meanB;
-                if constexpr (ComputeVariance)
-                    M2A = cache[off + 1];
-                nA = nB;
-            }
-            else
-            {
-                float delta = meanB - meanA;
-                int n = nA + nB;
+                int off = b * cols * stride + col * stride;
 
-                meanA += delta * (float(nB) / n);
+                float meanB = cache[off + 0];
+                int   nB    = (int)cache[off + stride - 1];
+                if (nB == 0) continue;
 
-                if constexpr (ComputeVariance)
+                if (nA == 0)
                 {
-                    float M2B = cache[off + 1];
-                    M2A += M2B + delta * delta * (float(nA) * nB / n);
+                    meanA = meanB;
+                    if constexpr (ComputeVariance)
+                        M2A = cache[off + 1];
+                    nA = nB;
                 }
+                else
+                {
+                    float delta = meanB - meanA;
+                    int N = nA + nB;
 
-                nA = n;
+                    meanA += delta * (float(nB) / N);
+
+                    if constexpr (ComputeVariance)
+                    {
+                        float M2B = cache[off + 1];
+                        M2A += M2B + delta * delta * (float(nA) * nB / N);
+                    }
+
+                    nA = N;
+                }
             }
-        }
 
-        dMean[col] = meanA;
-        if constexpr (ComputeVariance)
-            dVariance[col] = M2A / nA;
+            dMean[col] = meanA;
+            if constexpr (ComputeVariance)
+                dVariance[col] = M2A / nA;
+        }
     }
 
 
