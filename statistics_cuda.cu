@@ -44,151 +44,204 @@ namespace statistics::cuda
     }
 
     // Welford - Pébay style
-    template <bool ComputeMean = true,
-              bool ComputeVariance = false>
+    template<int MOMENT>
+    __device__ __forceinline__ void moment_update
+    (
+        float x,
+        int&   n,
+        float& m1,
+        float& m2,
+        float& m3,
+        float& m4
+    )
+    {
+        int n1 = n;
+        n++;
+
+        float delta  = x - m1;
+        float delta_n = delta / n;
+        float delta_n2 = delta_n * delta_n;
+        float term1 = delta * delta_n * n1;
+
+        if constexpr (MOMENT >= 1)
+            m1 += delta_n;
+
+        if constexpr (MOMENT >= 2)
+            m2 += term1;
+
+        if constexpr (MOMENT >= 3)
+            m3 += term1 * delta_n * (n - 2) - 3.0f * delta_n * m2;
+
+        if constexpr (MOMENT >= 4)
+            m4 += term1 * delta_n2 * (n*n - 3*n + 3)
+                + 6.0f * delta_n2 * m2
+                - 4.0f * delta_n * m3;
+    }
+
+
+    // Welford - Pébay style
+    template<int MOMENT>
+    __device__ __forceinline__ void moment_merge
+    (
+        int   nB,
+        float m1B, float m2B, float m3B, float m4B,
+        int&  nA,
+        float& m1A, float& m2A, float& m3A, float& m4A
+    )
+    {
+        if (nA == 0)
+        {
+            nA = nB;
+            m1A = m1B; m2A = m2B; m3A = m3B; m4A = m4B;
+            return;
+        }
+
+        float delta = m1B - m1A;
+        int   n = nA + nB;
+        float dn = delta / n;
+
+        if constexpr (MOMENT >= 4)
+            m4A += m4B
+                 + delta*delta*delta*delta * nA*nB*(nA*nA - nA*nB + nB*nB) / (float)(n*n*n)
+                 + 6.0f * delta*delta * (nA*nA*m2B + nB*nB*m2A) / (float)(n*n)
+                 + 4.0f * delta * (nA*m3B - nB*m3A) / (float)n;
+
+        if constexpr (MOMENT >= 3)
+            m3A += m3B
+                 + delta*delta*delta * nA*nB*(nA - nB) / (float)(n*n)
+                 + 3.0f * delta * (nA*m2B - nB*m2A) / (float)n;
+
+        if constexpr (MOMENT >= 2)
+            m2A += m2B + delta*delta * nA*nB / n;
+
+        if constexpr (MOMENT >= 1)
+            m1A += dn * nB;
+
+        nA = n;
+    }
+
+    template<int MOMENT, int SHARED_FLOATS>
     __global__ void column_stats_kernel
     (
         const float* __restrict__ X,
-        int rows,
-        int cols,
+        int rows, int cols,
         float* __restrict__ cache
     )
     {
-        __shared__ float s_mean[2048];
-        __shared__ float s_M2[2048];
-        __shared__ int   s_count[2048];
+        constexpr int S = SHARED_FLOATS / 5;
+
+        __shared__ float s_m1[S];
+        __shared__ float s_m2[S];
+        __shared__ float s_m3[S];
+        __shared__ float s_m4[S];
+        __shared__ int   s_n[S];
 
         int stride = (gridDim.x * blockDim.x) / cols * cols;
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-        if (idx >= stride || idx >= rows * cols) return;
+        if (idx >= stride || idx >= rows * cols)
+            return;
 
         int col = idx % cols;
 
-        float mean = 0.0f;
-        float M2   = 0.0f;
-        int   n    = 0;
+        float m1 = 0.f, m2 = 0.f, m3 = 0.f, m4 = 0.f;
+        int n  = 0;
 
         for (int i = idx; i < rows * cols; i += stride)
-        {
-            float x = X[i];
-            n++;
-            float delta  = x - mean;
-            mean += delta / n;
-            if constexpr (ComputeVariance)
-            {
-                float delta2 = x - mean;
-                M2 += delta * delta2;
-            }
-        }
+            moment_update<MOMENT>(X[i], n, m1, m2, m3, m4);
 
-        s_mean[threadIdx.x]  = mean;
-        s_M2[threadIdx.x]    = M2;
-        s_count[threadIdx.x] = n;
+        s_m1[threadIdx.x] = m1;
+        s_m2[threadIdx.x] = m2;
+        s_m3[threadIdx.x] = m3;
+        s_m4[threadIdx.x] = m4;
+        s_n [threadIdx.x] = n;
 
         __syncthreads();
 
         if (threadIdx.x < cols)
         {
-            float meanA = 0.0f;
-            float M2A   = 0.0f;
-            int   nA    = 0;
+            float A1=0,A2=0,A3=0,A4=0;
+            int   NA=0;
 
-            for (int t = threadIdx.x; t < blockDim.x; t += cols)
-            {
-                int nB = s_count[t];
-                if (nB == 0) continue;
+            for (int t = threadIdx.x; t < blockDim.x; t += cols) moment_merge<MOMENT>
+            (
+                s_n[t], s_m1[t], s_m2[t], s_m3[t], s_m4[t],
+                NA, A1, A2, A3, A4
+            );
 
-                float meanB = s_mean[t];
-                float M2B   = s_M2[t];
-
-                if (nA == 0)
-                {
-                    meanA = meanB;
-                    M2A   = M2B;
-                    nA    = nB;
-                }
-                else
-                {
-                    float delta = meanB - meanA;
-                    int N = nA + nB;
-                    meanA += delta * (float(nB) / N);
-                    if constexpr (ComputeVariance)
-                        M2A += M2B + delta * delta * (float(nA) * nB / N);
-                    nA = N;
-                }
-            }
-
-            int off = blockIdx.x * cols * (ComputeVariance ? 3 : 2)
-                    + col * (ComputeVariance ? 3 : 2);
-
-            cache[off + 0] = meanA;
-            if constexpr (ComputeVariance)
-                cache[off + 1] = M2A;
-            cache[off + (ComputeVariance ? 2 : 1)] = float(nA);
+            int off = blockIdx.x * cols * (MOMENT + 1) + col * (MOMENT + 1);
+            cache[off + 0] = A1;
+            if constexpr (MOMENT >= 2) cache[off + 1] = A2;
+            if constexpr (MOMENT >= 3) cache[off + 2] = A3;
+            if constexpr (MOMENT >= 4) cache[off + 3] = A4;
+            cache[off + MOMENT] = (float)NA;
         }
     }
 
     // Call with the same BlockDim
-    template <bool ComputeVariance = false>
+    template<int MOMENT>
     __global__ void column_reduce_kernel
     (
         const float* __restrict__ cache,
-        int blocks,
-        int cols,
-        float* __restrict__ dMean,
-        float* __restrict__ dVariance
+        int blocks, int cols,
+        float* __restrict__ outMean,
+        float* __restrict__ outVar,
+        float* __restrict__ outSkew,
+        float* __restrict__ outKurt
     )
     {
         int tid = threadIdx.x;
-        int stride_cols = blockDim.x;
+        if (tid >= cols) return;
 
-        int stride = (ComputeVariance ? 3 : 2);
+        int stride_cols = blockDim.x;
 
         for (int col = tid; col < cols; col += stride_cols)
         {
-            float meanA = 0.0f;
-            float M2A   = 0.0f;
-            int   nA    = 0;
+            float A1 = 0.f, A2 = 0.f, A3 = 0.f, A4 = 0.f;
+            int   NA = 0;
 
             for (int b = 0; b < blocks; ++b)
             {
-                int off = b * cols * stride + col * stride;
+                int off = b * cols * (MOMENT + 1) + col * (MOMENT + 1);
 
-                float meanB = cache[off + 0];
-                int   nB    = (int)cache[off + stride - 1];
-                if (nB == 0) continue;
-
-                if (nA == 0)
-                {
-                    meanA = meanB;
-                    if constexpr (ComputeVariance)
-                        M2A = cache[off + 1];
-                    nA = nB;
-                }
-                else
-                {
-                    float delta = meanB - meanA;
-                    int N = nA + nB;
-
-                    meanA += delta * (float(nB) / N);
-
-                    if constexpr (ComputeVariance)
-                    {
-                        float M2B = cache[off + 1];
-                        M2A += M2B + delta * delta * (float(nA) * nB / N);
-                    }
-
-                    nA = N;
-                }
+                moment_merge<MOMENT>
+                (
+                    (int)cache[off + MOMENT],
+                    cache[off + 0],
+                    MOMENT >= 2 ? cache[off + 1] : 0.f,
+                    MOMENT >= 3 ? cache[off + 2] : 0.f,
+                    MOMENT >= 4 ? cache[off + 3] : 0.f,
+                    NA, A1, A2, A3, A4
+                );
             }
 
-            dMean[col] = meanA;
-            if constexpr (ComputeVariance)
-                dVariance[col] = M2A / nA;
+            if constexpr (MOMENT >= 1)
+                outMean[col] = A1;
+
+            if constexpr (MOMENT >= 2)
+            {
+                float var = (NA > 0) ? (A2 / NA) : 0.f;
+                outVar[col] = var;
+
+                if constexpr (MOMENT >= 3)
+                {
+                    float sigma = sqrtf(var);
+                    outSkew[col] =
+                        (sigma > 0.f)
+                            ? (A3 / NA) / (sigma * sigma * sigma)
+                            : 0.f;
+                }
+
+                if constexpr (MOMENT >= 4)
+                {
+                    outKurt[col] =
+                        (var > 0.f)
+                            ? (A4 / NA) / (var * var)
+                            : 0.f;
+                }
+            }
         }
     }
-
 
 
     __global__ void centralize_kernel
@@ -247,70 +300,61 @@ namespace statistics::cuda
         return 0;
     }
 
-    void colum_stats(const float* dX, float* dMean, float* dVariance, float* dSkewness, int rows, int cols)
+    template<int MOMENT>
+    void colum_stats
+    (
+        const float* dX,
+        float* dMean,
+        float* dVariance,
+        float* dSkewness,
+        float* dKurtosis,
+        int rows,
+        int cols
+    )
     {
         LaunchConfig cfg = get_thread_config();
-
         int threads = cfg.threads_per_block;
         int blocks  = cfg.max_blocks;
 
-        std::cout << "Kernel parameters:\n"
+        std::cout << "\nKernel parameters:\n"
                   << "  blocks:  " << blocks << "\n"
-                  << "  threads: " << threads << "\n";
+                  << "  threads: " << threads << "\n\n";
 
-        int stride = (dVariance != nullptr) ? 3 : 2;
+        constexpr int SHARED_FLOATS = 5*2048;
+
         float* dCache = nullptr;
-        cudaMalloc(&dCache, cols * cfg.max_blocks * stride * sizeof(float));
+        cudaMalloc(&dCache, cols * blocks * (MOMENT + 1) * sizeof(float));
 
         auto start = std::chrono::high_resolution_clock::now();
 
-        if (dVariance != nullptr)
-            column_stats_kernel<true, true><<<blocks, threads>>>(dX, rows, cols, dCache);
-        else
-            column_stats_kernel<true, false><<<blocks, threads>>>(dX, rows, cols, dCache);
-
-        cudaError_t err = cudaDeviceSynchronize();
-        if (err != cudaSuccess)
-        {
-            cudaFree(dCache);
-            throw std::runtime_error(std::string("CUDA error in column_stats_kernel: ") + cudaGetErrorString(err));
-        }
-
-        if (dVariance != nullptr)
-            column_reduce_kernel<true><<<1, cfg.threads_per_block>>>(dCache, blocks, cols, dMean, dVariance);
-        else
-            column_reduce_kernel<false><<<1, cfg.threads_per_block>>>(dCache, blocks, cols, dMean, nullptr);
-
+        column_stats_kernel<MOMENT, SHARED_FLOATS><<<blocks, threads>>>(dX, rows, cols, dCache);
         cudaDeviceSynchronize();
+
+        column_reduce_kernel<MOMENT><<<1, threads>>>(dCache, blocks, cols, dMean, dVariance, dSkewness, dKurtosis);
+        cudaDeviceSynchronize();
+
         cudaFree(dCache);
+
+        std::vector<float> hMean(cols), hVar(cols), hSkew(cols), hKurt(cols);
+        if constexpr(MOMENT >= 1) cudaMemcpy(hMean.data(), dMean, cols*sizeof(float), cudaMemcpyDeviceToHost);
+        if constexpr(MOMENT >= 2) cudaMemcpy(hVar.data(), dVariance, cols*sizeof(float), cudaMemcpyDeviceToHost);
+        if constexpr(MOMENT >= 3) cudaMemcpy(hSkew.data(), dSkewness, cols*sizeof(float), cudaMemcpyDeviceToHost);
+        if constexpr(MOMENT >= 4) cudaMemcpy(hKurt.data(), dKurtosis, cols*sizeof(float), cudaMemcpyDeviceToHost);
 
         auto stop = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = stop - start;
-        std::cout << "column_stats total time: " << elapsed.count() << " ms\n";
 
-        float* hMean = new float[cols];
-        cudaMemcpy(hMean, dMean, cols * sizeof(float), cudaMemcpyDeviceToHost);
-
-        float* hVariance = nullptr;
-        if (dVariance != nullptr)
-        {
-            hVariance = new float[cols];
-            cudaMemcpy(hVariance, dVariance, cols * sizeof(float), cudaMemcpyDeviceToHost);
-        }
+        std::cout << "Column_stats total GPU time: " << elapsed.count() << " ms\n";
 
         for (int c = 0; c < cols; ++c)
         {
             std::cout << "Column " << c
-                      << " mean: " << hMean[c];
-
-            if (hVariance)
-                std::cout << ", variance: " << hVariance[c];
-
-            std::cout << std::endl;
+                      << " mean: "     << (MOMENT >= 1 ? hMean[c] : 0.0f)
+                      << ", variance: " << (MOMENT >= 2 ? hVar[c] : 0.0f)
+                      << ", skewness: " << (MOMENT >= 3 ? hSkew[c] : 0.0f)
+                      << ", kurtosis: " << (MOMENT >= 4 ? hKurt[c] : 0.0f)
+                      << std::endl;
         }
-
-        delete[] hMean;
-        if (hVariance) delete[] hVariance;
     }
 
     void centralize(const float* dX, float* dOut, const float* dMean, int rows, int cols)
@@ -328,49 +372,60 @@ namespace statistics::cuda
         }
 
         float* dMean = nullptr;
-        float * dVariance = nullptr;
+        float* dVariance = nullptr;
+        float* dSkewness = nullptr;
+        float* dKurtosis = nullptr;
 
-        cudaError_t err = cudaMalloc(&dMean, cols * sizeof(float));
-        if (err != cudaSuccess)
-            throw std::runtime_error("CudaMalloc failed for dMean");
+        cudaMalloc(&dMean, cols * sizeof(float));
+        cudaMalloc(&dVariance, cols * sizeof(float));
+        cudaMalloc(&dSkewness, cols * sizeof(float));
+        cudaMalloc(&dKurtosis, cols * sizeof(float));
 
-        cudaError_t err2 = cudaMalloc(&dVariance, cols * sizeof(float));
-        if (err2 != cudaSuccess)
-            throw std::runtime_error("CudaMalloc failed for dVariance");
-
-        colum_stats(dX, dMean, dVariance, nullptr, rows, cols);
+        colum_stats<4>(dX, dMean, dVariance, dSkewness, dKurtosis, rows, cols);
 
         centralize(dX, dOut, dMean, rows, cols);
 
         cudaFree(dMean);
         cudaFree(dVariance);
+        cudaFree(dSkewness);
+        cudaFree(dKurtosis);
     }
 
-    void column_stats_cpu
-    (
-        const float* hX,
-        int rows,
-        int cols
-    )
+
+    void column_stats_cpu(const float* hX, int rows, int cols)
     {
         std::vector<float> mean(cols, 0.0f);
-        std::vector<float> M2(cols, 0.0f);
-        std::vector<int>   count(cols, 0);
+        std::vector<float> variance(cols, 0.0f);
+        std::vector<float> skewness(cols, 0.0f);
+        std::vector<float> kurtosis(cols, 0.0f);
 
         auto start = std::chrono::high_resolution_clock::now();
 
-        for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c)
         {
-            for (int c = 0; c < cols; ++c)
-            {
-                float x = hX[r * cols + c];
+            double sum1 = 0.0;
+            double sum2 = 0.0;
+            double sum3 = 0.0;
+            double sum4 = 0.0;
 
-                count[c]++;
-                float delta = x - mean[c];
-                mean[c] += delta / count[c];
-                float delta2 = x - mean[c];
-                M2[c] += delta * delta2;
+            for (int r = 0; r < rows; ++r)
+            {
+                auto x = static_cast<double>(hX[r * cols + c]);
+                sum1 += x;
+                sum2 += x*x;
+                sum3 += x*x*x;
+                sum4 += x*x*x*x;
             }
+
+            double mean_ = sum1 / rows;
+            double m2 = sum2 / rows - mean_*mean_;
+            double m3 = sum3 / rows - 3.0*mean_*m2 - mean_*mean_*mean_;
+            double m4 = sum4 / rows - 4.0*mean_*m3 - 6.0*mean_*mean_*m2 - mean_*mean_*mean_*mean_;
+
+            mean[c]     = static_cast<float>(mean_);
+            variance[c] = static_cast<float>(m2);
+            skewness[c] = static_cast<float>(m3 / (m2 > 0 ? pow(m2, 1.5) : 1.0f));
+            kurtosis[c] = static_cast<float>(m4 / (m2 > 0 ? (m2*m2) : 1.0f));
         }
 
         auto stop = std::chrono::high_resolution_clock::now();
@@ -380,11 +435,11 @@ namespace statistics::cuda
 
         for (int c = 0; c < cols; ++c)
         {
-            float variance = (count[c] > 0) ? (M2[c] / count[c]) : 0.0f;
-
             std::cout << "CPU Column " << c
                       << " mean: " << mean[c]
-                      << ", variance: " << variance
+                      << ", variance: " << variance[c]
+                      << ", skewness: " << skewness[c]
+                      << ", kurtosis: " << kurtosis[c]
                       << std::endl;
         }
     }

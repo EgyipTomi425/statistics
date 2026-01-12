@@ -124,7 +124,7 @@ export void stat_ping(const dpp::slashcommand_t& event)
     {
         int rows1 = i;
         constexpr int cols1 = 1000;
-        std::cout << std:: endl << i << " rows, " << cols1 << " 10 cols" << std::endl;
+        std::cout << std:: endl << i << " rows, " << cols1 << " cols" << std::endl;
         auto matrix1 = generate_random_matrix(rows1, cols1);
         std::vector pca_matrix = statistics::pca(matrix1,rows1, cols1);
         std::cout << std::endl << std::endl;
