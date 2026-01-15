@@ -120,7 +120,7 @@ namespace statistics::cuda
         nA = n;
     }
 
-    template<int MOMENT, int SHARED_FLOATS>
+    template<int MOMENT, int SHARED_FLOATS = 7 * 1024>
     __global__ void column_stats_kernel
     (
         const float* __restrict__ X,
@@ -128,32 +128,41 @@ namespace statistics::cuda
         float* __restrict__ cache
     )
     {
-        constexpr int S = SHARED_FLOATS / 5;
+        constexpr int S = SHARED_FLOATS / 7;
 
         __shared__ float s_m1[S];
         __shared__ float s_m2[S];
         __shared__ float s_m3[S];
         __shared__ float s_m4[S];
+        __shared__ float s_min[S];
+        __shared__ float s_max[S];
         __shared__ int   s_n[S];
 
         int stride = (gridDim.x * blockDim.x) / cols * cols;
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-        if (idx >= stride || idx >= rows * cols)
-            return;
+        if (idx >= stride || idx >= rows * cols) return;
 
         int col = idx % cols;
 
         float m1 = 0.f, m2 = 0.f, m3 = 0.f, m4 = 0.f;
+        float mn = FLT_MAX, mx = -FLT_MAX;
         int n  = 0;
 
         for (int i = idx; i < rows * cols; i += stride)
-            moment_update<MOMENT>(X[i], n, m1, m2, m3, m4);
+        {
+            float v = X[i];
+            moment_update<MOMENT>(v, n, m1, m2, m3, m4);
+            mn = fminf(mn, v);
+            mx = fmaxf(mx, v);
+        }
 
         s_m1[threadIdx.x] = m1;
         s_m2[threadIdx.x] = m2;
         s_m3[threadIdx.x] = m3;
         s_m4[threadIdx.x] = m4;
+        s_min[threadIdx.x] = mn;
+        s_max[threadIdx.x] = mx;
         s_n [threadIdx.x] = n;
 
         __syncthreads();
@@ -161,20 +170,25 @@ namespace statistics::cuda
         if (threadIdx.x < cols)
         {
             float A1=0,A2=0,A3=0,A4=0;
+            float Amin = FLT_MAX, Amax = -FLT_MAX;
             int   NA=0;
 
-            for (int t = threadIdx.x; t < blockDim.x; t += cols) moment_merge<MOMENT>
+            for (int t = threadIdx.x; t < blockDim.x; t += cols) { moment_merge<MOMENT>
             (
                 s_n[t], s_m1[t], s_m2[t], s_m3[t], s_m4[t],
                 NA, A1, A2, A3, A4
-            );
+                ); Amin = fminf(Amin, s_min[t]); Amax = fmaxf(Amax, s_max[t]);
+            }
 
-            int off = blockIdx.x * cols * (MOMENT + 1) + col * (MOMENT + 1);
+            int stride_cache = MOMENT + 3;
+            int off = blockIdx.x * cols * stride_cache + col * stride_cache;
             cache[off + 0] = A1;
             if constexpr (MOMENT >= 2) cache[off + 1] = A2;
             if constexpr (MOMENT >= 3) cache[off + 2] = A3;
             if constexpr (MOMENT >= 4) cache[off + 3] = A4;
             cache[off + MOMENT] = (float)NA;
+            cache[off + MOMENT + 1] = Amin;
+            cache[off + MOMENT + 2] = Amax;
         }
     }
 
@@ -187,7 +201,9 @@ namespace statistics::cuda
         float* __restrict__ outMean,
         float* __restrict__ outVar,
         float* __restrict__ outSkew,
-        float* __restrict__ outKurt
+        float* __restrict__ outKurt,
+        float* __restrict__ outMin,
+        float* __restrict__ outMax
     )
     {
         int tid = threadIdx.x;
@@ -198,11 +214,12 @@ namespace statistics::cuda
         for (int col = tid; col < cols; col += stride_cols)
         {
             float A1 = 0.f, A2 = 0.f, A3 = 0.f, A4 = 0.f;
+            float Amin = FLT_MAX, Amax = -FLT_MAX;
             int   NA = 0;
 
             for (int b = 0; b < blocks; ++b)
             {
-                int off = b * cols * (MOMENT + 1) + col * (MOMENT + 1);
+                int off = b * cols * (MOMENT + 3) + col * (MOMENT + 3);
 
                 moment_merge<MOMENT>
                 (
@@ -213,6 +230,9 @@ namespace statistics::cuda
                     MOMENT >= 4 ? cache[off + 3] : 0.f,
                     NA, A1, A2, A3, A4
                 );
+
+                Amin = fminf(Amin, cache[off + MOMENT + 1]);
+                Amax = fmaxf(Amax, cache[off + MOMENT + 2]);
             }
 
             if constexpr (MOMENT >= 1)
@@ -240,6 +260,9 @@ namespace statistics::cuda
                             : 0.f;
                 }
             }
+
+            outMin[col] = Amin;
+            outMax[col] = Amax;
         }
     }
 
@@ -308,6 +331,8 @@ namespace statistics::cuda
         float* dVariance,
         float* dSkewness,
         float* dKurtosis,
+        float* dMin,
+        float* dMax,
         int rows,
         int cols
     )
@@ -320,26 +345,31 @@ namespace statistics::cuda
                   << "  blocks:  " << blocks << "\n"
                   << "  threads: " << threads << "\n\n";
 
-        constexpr int SHARED_FLOATS = 5*2048;
-
         float* dCache = nullptr;
-        cudaMalloc(&dCache, cols * blocks * (MOMENT + 1) * sizeof(float));
+        cudaMalloc(&dCache, cols * blocks * (MOMENT + 3) * sizeof(float));
 
         auto start = std::chrono::high_resolution_clock::now();
 
-        column_stats_kernel<MOMENT, SHARED_FLOATS><<<blocks, threads>>>(dX, rows, cols, dCache);
+        column_stats_kernel<MOMENT><<<blocks, threads>>>(dX, rows, cols, dCache);
         cudaDeviceSynchronize();
 
-        column_reduce_kernel<MOMENT><<<1, threads>>>(dCache, blocks, cols, dMean, dVariance, dSkewness, dKurtosis);
+        column_reduce_kernel<MOMENT>
+            <<<1, threads>>>(dCache, blocks, cols,
+                             dMean, dVariance, dSkewness, dKurtosis,
+                             dMin, dMax);
         cudaDeviceSynchronize();
 
         cudaFree(dCache);
 
-        std::vector<float> hMean(cols), hVar(cols), hSkew(cols), hKurt(cols);
+        std::vector<float> hMean(cols), hVar(cols), hSkew(cols), hKurt(cols), hMin(cols), hMax(cols);
+
         if constexpr(MOMENT >= 1) cudaMemcpy(hMean.data(), dMean, cols*sizeof(float), cudaMemcpyDeviceToHost);
         if constexpr(MOMENT >= 2) cudaMemcpy(hVar.data(), dVariance, cols*sizeof(float), cudaMemcpyDeviceToHost);
         if constexpr(MOMENT >= 3) cudaMemcpy(hSkew.data(), dSkewness, cols*sizeof(float), cudaMemcpyDeviceToHost);
         if constexpr(MOMENT >= 4) cudaMemcpy(hKurt.data(), dKurtosis, cols*sizeof(float), cudaMemcpyDeviceToHost);
+
+        cudaMemcpy(hMin.data(), dMin, cols*sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(hMax.data(), dMax, cols*sizeof(float), cudaMemcpyDeviceToHost);
 
         auto stop = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> elapsed = stop - start;
@@ -349,11 +379,13 @@ namespace statistics::cuda
         for (int c = 0; c < cols; ++c)
         {
             std::cout << "Column " << c
-                      << " mean: "     << (MOMENT >= 1 ? hMean[c] : 0.0f)
-                      << ", variance: " << (MOMENT >= 2 ? hVar[c] : 0.0f)
-                      << ", skewness: " << (MOMENT >= 3 ? hSkew[c] : 0.0f)
-                      << ", kurtosis: " << (MOMENT >= 4 ? hKurt[c] : 0.0f)
-                      << std::endl;
+                      << " mean: "     << (MOMENT >= 1 ? hMean[c] : 0.f)
+                      << ", var: "      << (MOMENT >= 2 ? hVar[c] : 0.f)
+                      << ", skew: "     << (MOMENT >= 3 ? hSkew[c] : 0.f)
+                      << ", kurt: "     << (MOMENT >= 4 ? hKurt[c] : 0.f)
+                      << ", min: "      << hMin[c]
+                      << ", max: "      << hMax[c]
+                      << "\n";
         }
     }
 
@@ -371,17 +403,19 @@ namespace statistics::cuda
             column_stats_cpu(hX.data(), rows, cols);
         }
 
-        float* dMean = nullptr;
-        float* dVariance = nullptr;
-        float* dSkewness = nullptr;
-        float* dKurtosis = nullptr;
+        float *dMean, *dVariance, *dSkewness, *dKurtosis, *dMin, *dMax;
 
         cudaMalloc(&dMean, cols * sizeof(float));
         cudaMalloc(&dVariance, cols * sizeof(float));
         cudaMalloc(&dSkewness, cols * sizeof(float));
         cudaMalloc(&dKurtosis, cols * sizeof(float));
+        cudaMalloc(&dMin, cols * sizeof(float));
+        cudaMalloc(&dMax, cols * sizeof(float));
 
-        colum_stats<4>(dX, dMean, dVariance, dSkewness, dKurtosis, rows, cols);
+        colum_stats<4>(dX,
+                       dMean, dVariance, dSkewness, dKurtosis,
+                       dMin, dMax,
+                       rows, cols);
 
         centralize(dX, dOut, dMean, rows, cols);
 
@@ -389,32 +423,31 @@ namespace statistics::cuda
         cudaFree(dVariance);
         cudaFree(dSkewness);
         cudaFree(dKurtosis);
+        cudaFree(dMin);
+        cudaFree(dMax);
     }
 
 
     void column_stats_cpu(const float* hX, int rows, int cols)
     {
-        std::vector<float> mean(cols, 0.0f);
-        std::vector<float> variance(cols, 0.0f);
-        std::vector<float> skewness(cols, 0.0f);
-        std::vector<float> kurtosis(cols, 0.0f);
+        std::vector<float> mean(cols), variance(cols), skewness(cols), kurtosis(cols), minv(cols), maxv(cols);
 
         auto start = std::chrono::high_resolution_clock::now();
 
         for (int c = 0; c < cols; ++c)
         {
-            double sum1 = 0.0;
-            double sum2 = 0.0;
-            double sum3 = 0.0;
-            double sum4 = 0.0;
+            double sum1=0, sum2=0, sum3=0, sum4=0;
+            double mn = DBL_MAX, mx = -DBL_MAX;
 
             for (int r = 0; r < rows; ++r)
             {
-                auto x = static_cast<double>(hX[r * cols + c]);
+                double x = hX[r * cols + c];
                 sum1 += x;
                 sum2 += x*x;
                 sum3 += x*x*x;
                 sum4 += x*x*x*x;
+                mn = std::min(mn, x);
+                mx = std::max(mx, x);
             }
 
             double mean_ = sum1 / rows;
@@ -422,10 +455,12 @@ namespace statistics::cuda
             double m3 = sum3 / rows - 3.0*mean_*m2 - mean_*mean_*mean_;
             double m4 = sum4 / rows - 4.0*mean_*m3 - 6.0*mean_*mean_*m2 - mean_*mean_*mean_*mean_;
 
-            mean[c]     = static_cast<float>(mean_);
-            variance[c] = static_cast<float>(m2);
-            skewness[c] = static_cast<float>(m3 / (m2 > 0 ? pow(m2, 1.5) : 1.0f));
-            kurtosis[c] = static_cast<float>(m4 / (m2 > 0 ? (m2*m2) : 1.0f));
+            mean[c]     = mean_;
+            variance[c] = m2;
+            skewness[c] = m3 / (m2 > 0 ? pow(m2,1.5) : 1.0);
+            kurtosis[c] = m4 / (m2 > 0 ? (m2*m2) : 1.0);
+            minv[c] = mn;
+            maxv[c] = mx;
         }
 
         auto stop = std::chrono::high_resolution_clock::now();
@@ -437,10 +472,12 @@ namespace statistics::cuda
         {
             std::cout << "CPU Column " << c
                       << " mean: " << mean[c]
-                      << ", variance: " << variance[c]
-                      << ", skewness: " << skewness[c]
-                      << ", kurtosis: " << kurtosis[c]
-                      << std::endl;
+                      << ", var: " << variance[c]
+                      << ", skew: " << skewness[c]
+                      << ", kurt: " << kurtosis[c]
+                      << ", min: " << minv[c]
+                      << ", max: " << maxv[c]
+                      << "\n";
         }
     }
 }
