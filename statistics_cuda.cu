@@ -266,14 +266,34 @@ namespace statistics::cuda
         }
     }
 
-
     __global__ void centralize_kernel
     (
-        const float* X, float* Y, const float* mean,
-        int rows, int cols
+        const float* __restrict__ X,
+        float* __restrict__ Y,
+        const float* __restrict__ mean,
+        const float* __restrict__ var,
+        int rows,
+        int cols
     )
     {
+        int stride = (gridDim.x * blockDim.x) / cols * cols;
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
+        if (idx >= stride || idx >= rows * cols) return;
+
+        int col = idx % cols;
+
+        for (int i = idx; i < rows * cols; i += stride)
+        {
+            float v = X[i] - mean[col];
+
+            if (var)
+            {
+                v *= rsqrtf(var[col] + 1e-8f);
+            }
+
+            Y[i] = v;
+        }
     }
 
     int print_device_info()
@@ -376,7 +396,9 @@ namespace statistics::cuda
 
         std::cout << "Column_stats total GPU time: " << elapsed.count() << " ms\n";
 
-        for (int c = 0; c < cols; ++c)
+        std::cout << "--- Moments of the matrix first 10 cols ---\n";
+        int maxCols = std::min(10, cols);
+        for (int c = 0; c < maxCols; ++c)
         {
             std::cout << "Column " << c
                       << " mean: "     << (MOMENT >= 1 ? hMean[c] : 0.f)
@@ -389,18 +411,39 @@ namespace statistics::cuda
         }
     }
 
-    void centralize(const float* dX, float* dOut, const float* dMean, int rows, int cols)
+    void centralize(const float* dX, float* dOut, const float* dMean, const float* dVar, int rows, int cols)
     {
+        LaunchConfig cfg = get_thread_config();
+        int threads = cfg.threads_per_block;
+        int blocks  = cfg.max_blocks;
 
+        centralize_kernel<<<blocks, threads>>>(dX, dOut, dMean, dVar, rows, cols);
+        cudaDeviceSynchronize();
+
+        std::vector<float> hY(rows * cols);
+        cudaMemcpy(hY.data(), dOut, rows * cols * sizeof(float), cudaMemcpyDeviceToHost);
+
+        std::cout << "\n--- Centralized / standardized first 5 rows and 10 cols ---\n";
+        for (int r = 0; r < std::min(5, rows); ++r)
+        {
+            for (int c = 0; c < std::min(10, cols); ++c)
+                std::cout << hY[r * cols + c] << " ";
+            std::cout << "\n";
+        }
     }
 
-    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result)
+    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result, bool standardize)
     {
         if (check_result)
         {
             std::vector<float> hX(rows * cols);
             cudaMemcpy(hX.data(), dX, rows * cols * sizeof(float), cudaMemcpyDeviceToHost);
-            column_stats_cpu(hX.data(), rows, cols);
+
+            std::vector<float> mean, variance, skewness, kurtosis, minv, maxv;
+            column_stats_cpu(hX.data(), rows, cols, mean, variance, skewness, kurtosis, minv, maxv);
+
+            std::vector<float> hY(rows * cols);
+            centralize_cpu(hX.data(), hY.data(), rows, cols, mean, standardize ? &variance : nullptr);
         }
 
         float *dMean, *dVariance, *dSkewness, *dKurtosis, *dMin, *dMax;
@@ -417,7 +460,10 @@ namespace statistics::cuda
                        dMin, dMax,
                        rows, cols);
 
-        centralize(dX, dOut, dMean, rows, cols);
+        if (standardize)
+            centralize(dX, dOut, dMean, dVariance, rows, cols);
+        else
+            centralize(dX, dOut, dMean, nullptr, rows, cols);
 
         cudaFree(dMean);
         cudaFree(dVariance);
@@ -428,9 +474,24 @@ namespace statistics::cuda
     }
 
 
-    void column_stats_cpu(const float* hX, int rows, int cols)
+    void column_stats_cpu
+    (
+        const float* hX,
+        int rows, int cols,
+        std::vector<float>& mean,
+        std::vector<float>& variance,
+        std::vector<float>& skewness,
+        std::vector<float>& kurtosis,
+        std::vector<float>& minv,
+        std::vector<float>& maxv
+    )
     {
-        std::vector<float> mean(cols), variance(cols), skewness(cols), kurtosis(cols), minv(cols), maxv(cols);
+        mean.resize(cols);
+        variance.resize(cols);
+        skewness.resize(cols);
+        kurtosis.resize(cols);
+        minv.resize(cols);
+        maxv.resize(cols);
 
         auto start = std::chrono::high_resolution_clock::now();
 
@@ -457,8 +518,8 @@ namespace statistics::cuda
 
             mean[c]     = mean_;
             variance[c] = m2;
-            skewness[c] = m3 / (m2 > 0 ? pow(m2,1.5) : 1.0);
-            kurtosis[c] = m4 / (m2 > 0 ? (m2*m2) : 1.0);
+            skewness[c] = m2 > 0 ? m3 / pow(m2,1.5) : 0.f;
+            kurtosis[c] = m2 > 0 ? m4 / (m2*m2) : 0.f;
             minv[c] = mn;
             maxv[c] = mx;
         }
@@ -468,9 +529,21 @@ namespace statistics::cuda
 
         std::cout << "CPU column_stats time: " << elapsed.count() << " ms\n";
 
-        for (int c = 0; c < cols; ++c)
+        std::cout << "\n--- The original matrix's 5 rows and 10 cols ---\n";
+        for (int r = 0; r < std::min(5, rows); ++r)
         {
-            std::cout << "CPU Column " << c
+            for (int c = 0; c < std::min(10, cols); ++c)
+            {
+                float x = hX[r * cols + c];
+                std::cout << x << " ";
+            }
+            std::cout << "\n";
+        }
+
+        std::cout << "\n--- Moments of the matrix first 10 cols ---\n";
+        for (int c = 0; c < std::min(10, cols); ++c)
+        {
+            std::cout << "Column " << c
                       << " mean: " << mean[c]
                       << ", var: " << variance[c]
                       << ", skew: " << skewness[c]
@@ -478,6 +551,35 @@ namespace statistics::cuda
                       << ", min: " << minv[c]
                       << ", max: " << maxv[c]
                       << "\n";
+        }
+    }
+
+    void centralize_cpu
+    (
+        const float* hX,
+        float* hY,
+        int rows, int cols,
+        const std::vector<float>& mean,
+        const std::vector<float>* variance
+    )
+    {
+        for (int r = 0; r < rows; ++r)
+        {
+            for (int c = 0; c < cols; ++c)
+            {
+                float v = hX[r * cols + c] - mean[c];
+                if (variance)
+                    v *= 1.f / std::sqrt((*variance)[c] + 1e-8f);
+                hY[r * cols + c] = v;
+            }
+        }
+
+        std::cout << "\n--- Centralized / standardized first 5 rows and 10 cols ---\n";
+        for (int r = 0; r < std::min(5, rows); ++r)
+        {
+            for (int c = 0; c < std::min(10, cols); ++c)
+                std::cout << hY[r * cols + c] << " ";
+            std::cout << "\n";
         }
     }
 }
