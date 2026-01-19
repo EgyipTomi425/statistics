@@ -5,6 +5,7 @@
 #include <chrono>
 #include <iomanip>
 #include <cmath>
+#include <fstream>
 
 #include <cublas_v2.h>
 #include <cusolverDn.h>

@@ -4,6 +4,7 @@ module;
 #include <vector>
 #include <sstream>
 #include <unordered_map>
+#include <fstream>
 
 export module statistics.helper;
 
@@ -202,5 +203,16 @@ export namespace statistics::helper
             total_cols - static_cast<int>(result.categorical_cols.size());
 
         return result;
+    }
+
+    inline std::string read_file_text(const std::string& path)
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+            throw std::runtime_error("Failed to open file: " + path);
+
+        std::ostringstream ss;
+        ss << file.rdbuf();
+        return ss.str();
     }
 }
