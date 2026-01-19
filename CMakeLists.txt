@@ -57,6 +57,7 @@ target_link_libraries(statistics
         PUBLIC
             CUDA::cudart
             CUDA::cublas
+            CUDA::cusolver
             statistics_cuda_lib
 )
 
