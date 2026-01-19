@@ -448,13 +448,40 @@ namespace statistics::cuda
     void pca_svd_helper
     (
         const float* dX,
-        int rows,
-        int cols,
+        int rows, int cols,
         const float* dMean,
         const float* dVar,
         bool standardize
     )
     {
+        cublasHandle_t handle;
+        cublasCreate(&handle);
+
+        float* dXt;
+        cudaMalloc(&dXt, rows * cols * sizeof(float));
+
+        const float alpha = 1.f;
+        const float beta  = 0.f;
+
+        cublasSgeam
+        (
+            handle,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            rows,
+            cols,
+            &alpha,
+            dX,
+            cols,
+            &beta,
+            nullptr,
+            rows,
+            dXt,
+            rows
+        );
+
+        cudaDeviceSynchronize();
+
         cusolverDnHandle_t cusolver;
         cusolverDnCreate(&cusolver);
 
@@ -462,14 +489,14 @@ namespace statistics::cuda
         int n = cols;
         int lda = m;
 
-        float* dA = const_cast<float*>(dX);
+        float* dA = dXt;
 
         float* dS;
         float* dU;
         float* dVt;
         int*   dInfo;
 
-        int k = std::min(m, n);
+        int k = std::min(m,n);
 
         cudaMalloc(&dS, k * sizeof(float));
         cudaMalloc(&dU, m * k * sizeof(float));
@@ -499,51 +526,49 @@ namespace statistics::cuda
         cudaDeviceSynchronize();
 
         std::vector<float> hS(k);
-        std::vector<float> hVt(k * n);
+        std::vector<float> hVt(k*n);
         cudaMemcpy(hS.data(), dS, k*sizeof(float), cudaMemcpyDeviceToHost);
         cudaMemcpy(hVt.data(), dVt, k*n*sizeof(float), cudaMemcpyDeviceToHost);
 
         double totalVar = 0.0;
-        for (int i=0;i<k;i++) totalVar += double(hS[i])*double(hS[i]);
+        for(int i=0;i<k;i++) totalVar += double(hS[i])*double(hS[i]);
 
         std::cout << "\n=== PCA SVD summary ===\n";
         std::cout << "Comp | Sigma      | Var %    | Cum %\n";
         std::cout << "------------------------------------\n";
         double cum = 0.0;
-        int show = std::min(10, k);
-        for (int i=0;i<show;i++)
+        int show = std::min(10,k);
+        for(int i=0;i<show;i++)
         {
             double v = double(hS[i])*double(hS[i]);
             double r = v / totalVar;
             cum += r;
-            std::cout
-                << std::setw(4) << (i+1)
-                << " | " << std::setw(10) << hS[i]
-                << " | " << std::setw(7) << r*100.0
-                << " | " << std::setw(7) << cum*100.0
-                << "\n";
+            std::cout << std::setw(4) << (i+1)
+                      << " | " << std::setw(10) << hS[i]
+                      << " | " << std::setw(7) << r*100.0
+                      << " | " << std::setw(7) << cum*100.0
+                      << "\n";
         }
 
         std::cout << "\n--- Top 3 variables per component ---\n";
-        for (int i=0;i<show;i++)
-        {
+        for(int i=0;i<show;i++){
             std::vector<std::pair<float,int>> abs_weights;
-            for (int j=0;j<n;j++)
+            for(int j=0;j<n;j++)
                 abs_weights.push_back({std::abs(hVt[i*n + j]), j});
             std::sort(abs_weights.rbegin(), abs_weights.rend());
 
             std::cout << "Component " << (i+1) << ": ";
-            for (int t=0;t<std::min(3,(int)abs_weights.size());t++)
+            for(int t=0;t<std::min(3,(int)abs_weights.size());t++)
                 std::cout << "Col " << abs_weights[t].second << " ("
                           << hVt[i*n + abs_weights[t].second] << ") ";
             std::cout << "\n";
         }
 
         std::cout << "\n--- Component weights (first 10 columns) ---\n";
-        for (int i=0;i<show;i++)
+        for(int i=0;i<show;i++)
         {
             std::cout << "Comp " << (i+1) << ": ";
-            for (int j=0;j<std::min(10,n);j++)
+            for(int j=0;j<std::min(10,n);j++)
                 std::cout << std::setw(8) << hVt[i*n + j] << " ";
             std::cout << "\n";
         }
@@ -554,7 +579,7 @@ namespace statistics::cuda
         cudaMemcpy(hVar.data(), dVar, cols*sizeof(float), cudaMemcpyDeviceToHost);
 
         std::cout << "\n--- Column mean and scaling (for new data) ---\n";
-        for (int j=0;j<cols;j++)
+        for(int j=0;j<cols;j++)
         {
             double scale = standardize ? std::sqrt(hVar[j] + 1e-8) : 1.0;
             std::cout << "Col " << j << ": mean = " << hMean[j] << ", scale = " << scale << "\n";
@@ -565,8 +590,9 @@ namespace statistics::cuda
         cudaFree(dVt);
         cudaFree(dWork);
         cudaFree(dInfo);
-
+        cudaFree(dXt);
         cusolverDnDestroy(cusolver);
+        cublasDestroy(handle);
     }
 
     void pca(const float* dX, float* dOut, int rows, int cols, bool check_result, bool standardize)
