@@ -11,5 +11,7 @@ int main()
 
     std::cout << csv_result << std::endl;
 
+    auto pca_matrix = statistics::pca(csv_result.matrix, csv_result.rows, csv_result.cols);
+
     return 0;
 }

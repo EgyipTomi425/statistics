@@ -25,6 +25,7 @@ export namespace statistics
     (
         const std::vector<float>& X,
         int rows,
-        int cols
+        int cols,
+        bool check_result = false
     );
 }

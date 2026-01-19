@@ -64,7 +64,7 @@ namespace statistics
         return C;
     }
 
-    std::vector<float> pca(const std::vector<float>& X, int rows, int cols)
+    std::vector<float> pca(const std::vector<float>& X, int rows, int cols, bool check_result)
     {
         std::vector<float> result(rows * cols);
 
@@ -90,7 +90,7 @@ namespace statistics
             throw std::runtime_error("cudaMemcpy H2D failed");
         }
 
-        statistics::cuda::pca(dX, dOut, rows, cols);
+        statistics::cuda::pca(dX, dOut, rows, cols, check_result);
         err = cudaMemcpy(result.data(), dOut, result.size() * sizeof(float), cudaMemcpyDeviceToHost);
 
         cudaFree(dX);
