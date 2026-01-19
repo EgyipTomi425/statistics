@@ -140,8 +140,9 @@ namespace statistics::cuda
 
         int stride = (gridDim.x * blockDim.x) / cols * cols;
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int rows_cols = rows * cols;
 
-        if (idx >= stride || idx >= rows * cols) return;
+        if (idx >= stride || idx >= rows_cols) return;
 
         int col = idx % cols;
 
@@ -173,11 +174,15 @@ namespace statistics::cuda
             float Amin = FLT_MAX, Amax = -FLT_MAX;
             int   NA=0;
 
-            for (int t = threadIdx.x; t < blockDim.x; t += cols) { moment_merge<MOMENT>
-            (
-                s_n[t], s_m1[t], s_m2[t], s_m3[t], s_m4[t],
-                NA, A1, A2, A3, A4
-                ); Amin = fminf(Amin, s_min[t]); Amax = fmaxf(Amax, s_max[t]);
+            for (int t = threadIdx.x; t < blockDim.x &&
+                !(blockIdx.x * blockDim.x + t >= stride || blockIdx.x * blockDim.x + t >= rows_cols); t += cols)
+            {
+                moment_merge<MOMENT>
+                (
+                    s_n[t], s_m1[t], s_m2[t], s_m3[t], s_m4[t],
+                    NA, A1, A2, A3, A4
+                );
+                Amin = fminf(Amin, s_min[t]); Amax = fmaxf(Amax, s_max[t]);
             }
 
             int stride_cache = MOMENT + 3;
@@ -220,10 +225,12 @@ namespace statistics::cuda
             for (int b = 0; b < blocks; ++b)
             {
                 int off = b * cols * (MOMENT + 3) + col * (MOMENT + 3);
+                int nB = (int)cache[off + MOMENT];
+                if (nB == 0) continue;
 
                 moment_merge<MOMENT>
                 (
-                    (int)cache[off + MOMENT],
+                    nB,
                     cache[off + 0],
                     MOMENT >= 2 ? cache[off + 1] : 0.f,
                     MOMENT >= 3 ? cache[off + 2] : 0.f,
