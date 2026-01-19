@@ -1,0 +1,11 @@
+/*build*/
+/*out*/
+
+*.o
+*.obj
+*.exe
+*.out
+*.log
+
+.*
+!*.gitignore
