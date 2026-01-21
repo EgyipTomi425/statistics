@@ -1,3 +1,7 @@
+/*
+    https://people.xiph.org/~tterribe/pubs/P%C3%A9bayTerriberryKolla%2B16-_Numerically_Stable%2C_Scalable_Formulas_for_parallel_and_Online_Computation_of_Higher-Order_Multivariate_Central_Moments_with_Arbitrary_Weights.pdf
+*/
+
 #include "statistics_cuda.h"
 
 #include <cuda_runtime.h>
@@ -52,7 +56,7 @@ namespace statistics::cuda
 
     // Welford - Pébay style
     template<int MOMENT>
-    __device__ __forceinline__ void moment_update
+    __device__ __forceinline__ void moment_update_increment
     (
         float x,
         int&   n,
@@ -88,7 +92,7 @@ namespace statistics::cuda
 
     // Welford - Pébay style
     template<int MOMENT>
-    __device__ __forceinline__ void moment_merge
+    __device__ __forceinline__ void moment_merge_increment
     (
         int   nB,
         float m1B, float m2B, float m3B, float m4B,
@@ -128,7 +132,7 @@ namespace statistics::cuda
     }
 
     template<int MOMENT, int SHARED_FLOATS = 7 * 1024>
-    __global__ void column_stats_kernel
+    __global__ void column_stats_kernel_increment
     (
         const float* __restrict__ X,
         int rows, int cols,
@@ -160,7 +164,7 @@ namespace statistics::cuda
         for (int i = idx; i < rows * cols; i += stride)
         {
             float v = X[i];
-            moment_update<MOMENT>(v, n, m1, m2, m3, m4);
+            moment_update_increment<MOMENT>(v, n, m1, m2, m3, m4);
             mn = fminf(mn, v);
             mx = fmaxf(mx, v);
         }
@@ -184,7 +188,7 @@ namespace statistics::cuda
             for (int t = threadIdx.x; t < blockDim.x &&
                 !(blockIdx.x * blockDim.x + t >= stride || blockIdx.x * blockDim.x + t >= rows_cols); t += cols)
             {
-                moment_merge<MOMENT>
+                moment_merge_increment<MOMENT>
                 (
                     s_n[t], s_m1[t], s_m2[t], s_m3[t], s_m4[t],
                     NA, A1, A2, A3, A4
@@ -206,7 +210,7 @@ namespace statistics::cuda
 
     // Call with the same BlockDim
     template<int MOMENT>
-    __global__ void column_reduce_kernel
+    __global__ void column_reduce_kernel_increment
     (
         const float* __restrict__ cache,
         int blocks, int cols,
@@ -235,7 +239,7 @@ namespace statistics::cuda
                 int nB = (int)cache[off + MOMENT];
                 if (nB == 0) continue;
 
-                moment_merge<MOMENT>
+                moment_merge_increment<MOMENT>
                 (
                     nB,
                     cache[off + 0],
@@ -310,6 +314,274 @@ namespace statistics::cuda
         }
     }
 
+    template<int SHARED_FLOATS = 4 * 1024>
+    __global__ void column_mean_kernel
+    (
+        const float* __restrict__ X,
+        int rows, int cols,
+        float* __restrict__ cache
+    )
+    {
+        constexpr int S = SHARED_FLOATS / 4;
+
+        __shared__ float s_sum[S];
+        __shared__ float s_min[S];
+        __shared__ float s_max[S];
+        __shared__ int   s_n[S];
+
+        int stride = (gridDim.x * blockDim.x) / cols * cols;
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int rows_cols = rows * cols;
+
+        if (idx >= stride || idx >= rows_cols) return;
+
+        int col = idx % cols;
+
+        float sum = 0.f;
+        float mn  = FLT_MAX;
+        float mx  = -FLT_MAX;
+        int   n   = 0;
+
+        for (int i = idx; i < rows_cols; i += stride)
+        {
+            float v = X[i];
+            sum += v;
+            mn = fminf(mn, v);
+            mx = fmaxf(mx, v);
+            ++n;
+        }
+
+        s_sum[threadIdx.x] = sum;
+        s_min[threadIdx.x] = mn;
+        s_max[threadIdx.x] = mx;
+        s_n[threadIdx.x]   = n;
+
+        __syncthreads();
+
+        if (threadIdx.x < cols)
+        {
+            float A_sum = 0.f;
+            float A_min = FLT_MAX;
+            float A_max = -FLT_MAX;
+            int   A_n   = 0;
+
+            for (int t = threadIdx.x; t < blockDim.x &&
+                !(blockIdx.x * blockDim.x + t >= stride ||
+                  blockIdx.x * blockDim.x + t >= rows_cols);
+                t += cols)
+            {
+                A_sum += s_sum[t];
+                A_min = fminf(A_min, s_min[t]);
+                A_max = fmaxf(A_max, s_max[t]);
+                A_n   += s_n[t];
+            }
+
+            int off = blockIdx.x * cols * 4 + col * 4;
+            cache[off + 0] = A_sum;
+            cache[off + 1] = (float)A_n;
+            cache[off + 2] = A_min;
+            cache[off + 3] = A_max;
+        }
+    }
+
+    __global__ void column_mean_reduce_kernel
+    (
+        const float* __restrict__ cache,
+        int blocks, int cols,
+        float* __restrict__ outMean,
+        float* __restrict__ outMin,
+        float* __restrict__ outMax
+    )
+    {
+        int tid = threadIdx.x;
+        if (tid >= cols) return;
+
+        for (int col = tid; col < cols; col += blockDim.x)
+        {
+            float sum = 0.f;
+            float mn  = FLT_MAX;
+            float mx  = -FLT_MAX;
+            int   n   = 0;
+
+            for (int b = 0; b < blocks; ++b)
+            {
+                int off = b * cols * 4 + col * 4;
+
+                float s = cache[off + 0];
+                int   c = (int)cache[off + 1];
+                float mi = cache[off + 2];
+                float ma = cache[off + 3];
+
+                if (c == 0) continue;
+
+                sum += s;
+                n   += c;
+                mn = fminf(mn, mi);
+                mx = fmaxf(mx, ma);
+            }
+
+            outMean[col] = (n > 0) ? sum / n : 0.f;
+            outMin[col]  = mn;
+            outMax[col]  = mx;
+        }
+    }
+
+    template<int MOMENT, int SHARED_FLOATS = 5*1024>
+    __global__ void column_moment_kernel_two_pass
+    (
+        const float* __restrict__ X,
+        const float* __restrict__ mean,
+        int rows, int cols,
+        float* __restrict__ cache
+    )
+    {
+        constexpr int S = SHARED_FLOATS / 5;
+
+        __shared__ float s_m1[S];
+        __shared__ float s_m2[S];
+        __shared__ float s_m3[S];
+        __shared__ float s_m4[S];
+        __shared__ int   s_n[S];
+
+        int stride = (gridDim.x * blockDim.x) / cols * cols;
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int rows_cols = rows * cols;
+
+        if (idx >= stride || idx >= rows_cols) return;
+
+        int col = idx % cols;
+
+        float m1=0.f, m2=0.f, m3=0.f, m4=0.f;
+        int   n =0;
+
+        for (int i = idx; i < rows_cols; i += stride)
+        {
+            float dx = X[i] - mean[col];
+
+            if constexpr(MOMENT >= 1) m1 += dx;
+            if constexpr(MOMENT >= 2) m2 += dx*dx;
+            if constexpr(MOMENT >= 3) m3 += dx*dx*dx;
+            if constexpr(MOMENT >= 4) m4 += dx*dx*dx*dx;
+
+            n++;
+        }
+
+        if constexpr(MOMENT >= 1) s_m1[threadIdx.x] = m1;
+        if constexpr(MOMENT >= 2) s_m2[threadIdx.x] = m2;
+        if constexpr(MOMENT >= 3) s_m3[threadIdx.x] = m3;
+        if constexpr(MOMENT >= 4) s_m4[threadIdx.x] = m4;
+        s_n[threadIdx.x] = n;
+
+        __syncthreads();
+
+        if (threadIdx.x < cols)
+        {
+            float A1=0.f, A2=0.f, A3=0.f, A4=0.f;
+            int   NA=0;
+
+            for (int t = threadIdx.x;
+                 t < blockDim.x &&
+                 !(blockIdx.x*blockDim.x + t >= stride || blockIdx.x*blockDim.x + t >= rows_cols);
+                 t += cols)
+            {
+                if constexpr(MOMENT >= 1) A1 += s_m1[t];
+                if constexpr(MOMENT >= 2) A2 += s_m2[t];
+                if constexpr(MOMENT >= 3) A3 += s_m3[t];
+                if constexpr(MOMENT >= 4) A4 += s_m4[t];
+                NA += s_n[t];
+            }
+
+            int off = blockIdx.x * cols * (MOMENT+1) + col*(MOMENT+1);
+            if constexpr(MOMENT >= 1) cache[off+0] = A1;
+            if constexpr(MOMENT >= 2) cache[off+1] = A2;
+            if constexpr(MOMENT >= 3) cache[off+2] = A3;
+            if constexpr(MOMENT >= 4) cache[off+3] = A4;
+            cache[off+MOMENT] = (float)NA;
+        }
+    }
+
+    template<int MOMENT>
+    __global__ void column_moment_reduce_kernel_two_pass
+    (
+        const float* __restrict__ cache,
+        int blocks, int cols,
+        float* __restrict__ outVar,
+        float* __restrict__ outSkew,
+        float* __restrict__ outKurt
+    )
+    {
+        int col = threadIdx.x + blockIdx.x * blockDim.x;
+        if (col >= cols) return;
+
+        float A1=0.f, A2=0.f, A3=0.f, A4=0.f;
+        int   NA=0;
+
+        for (int b = 0; b < blocks; ++b)
+        {
+            int off = b * cols * (MOMENT + 1) + col * (MOMENT + 1);
+            int nB = (int)cache[off + MOMENT];
+            if (nB == 0) continue;
+
+            if constexpr (MOMENT >= 1) A1 += cache[off + 0];
+            if constexpr (MOMENT >= 2) A2 += cache[off + 1];
+            if constexpr (MOMENT >= 3) A3 += cache[off + 2];
+            if constexpr (MOMENT >= 4) A4 += cache[off + 3];
+
+            NA += nB;
+        }
+
+        if (NA == 0) // Előbb lesz ötösöm a lottón, minthogy 0 legyen a kerekítési hiba, ed hátha
+        { // Mondjuk ha mindegyik kicsi, egész szám... talán...
+            if constexpr (MOMENT >= 2) outVar[col]  = 0.f;
+            if constexpr (MOMENT >= 3) outSkew[col] = 0.f;
+            if constexpr (MOMENT >= 4) outKurt[col] = 0.f;
+            return;
+        }
+
+        float N = (float)NA;
+        float S1=A1, S2=A2, S3=A3, S4=A4;
+
+        float delta = S1 / N;
+
+        float mu2=0.f, mu3=0.f, mu4=0.f;
+
+        if constexpr(MOMENT >= 2)
+            mu2 = S2 - N * delta * delta;
+
+        if constexpr(MOMENT >= 3)
+            mu3 = S3 - 3.f * delta * S2 + 2.f * N * delta*delta*delta;
+
+        if constexpr(MOMENT >= 4)
+            mu4 = S4
+                - 4.f * delta * S3
+                + 6.f * delta*delta * S2
+                - 3.f * N * delta*delta*delta*delta;
+
+        float var=0.f, skew=0.f, kurt=0.f;
+
+        if constexpr(MOMENT >= 2)
+            var = mu2 / N;
+
+        if constexpr(MOMENT >= 3)
+        {
+            if (var > 0.f)
+            {
+                float sigma = sqrtf(var);
+                skew = (mu3 / N) / (sigma*sigma*sigma);
+            }
+        }
+
+        if constexpr(MOMENT >= 4)
+        {
+            if (var > 0.f)
+                kurt = (mu4 / N) / (var*var);
+        }
+
+        if constexpr (MOMENT >= 2) outVar[col]  = var;
+        if constexpr (MOMENT >= 3) outSkew[col] = skew;
+        if constexpr (MOMENT >= 4) outKurt[col] = kurt;
+    }
+
     int print_device_info()
     {
         int deviceCount = 0;
@@ -357,7 +629,7 @@ namespace statistics::cuda
         return 0;
     }
 
-    template<int MOMENT>
+    template<int MOMENT, bool TWO_PASS = true>
     void colum_stats
     (
         const float* dX,
@@ -380,18 +652,43 @@ namespace statistics::cuda
                   << "  threads: " << threads << "\n\n";
 
         float* dCache = nullptr;
-        cudaMalloc(&dCache, cols * blocks * (MOMENT + 3) * sizeof(float));
 
         auto start = std::chrono::high_resolution_clock::now();
 
-        column_stats_kernel<MOMENT><<<blocks, threads>>>(dX, rows, cols, dCache);
-        cudaDeviceSynchronize();
+        if constexpr (TWO_PASS)
+        {
+            cudaMalloc(&dCache, cols * blocks * 4 * sizeof(float));
+            column_mean_kernel<<<blocks, threads>>>(dX, rows, cols, dCache);
+            cudaDeviceSynchronize();
 
-        column_reduce_kernel<MOMENT>
-            <<<1, threads>>>(dCache, blocks, cols,
-                             dMean, dVariance, dSkewness, dKurtosis,
-                             dMin, dMax);
-        cudaDeviceSynchronize();
+            column_mean_reduce_kernel<<<1, threads>>>(dCache, blocks, cols, dMean, dMin, dMax);
+            cudaDeviceSynchronize();
+            cudaFree(dCache);
+
+            int moment_cache_size = cols * blocks * (MOMENT + 1) * sizeof(float);
+            cudaMalloc(&dCache, moment_cache_size);
+
+            column_moment_kernel_two_pass<MOMENT><<<blocks, threads>>>(dX, dMean, rows, cols, dCache);
+            cudaDeviceSynchronize();
+
+            column_moment_reduce_kernel_two_pass<MOMENT><<<1, threads>>>(dCache, blocks, cols,
+                                                                         dVariance, dSkewness, dKurtosis);
+            cudaDeviceSynchronize();
+        }
+
+        if constexpr (!TWO_PASS)
+        {
+            cudaMalloc(&dCache, cols * blocks * (MOMENT + 3) * sizeof(float));
+
+            column_stats_kernel_increment<MOMENT><<<blocks, threads>>>(dX, rows, cols, dCache);
+            cudaDeviceSynchronize();
+
+            column_reduce_kernel_increment<MOMENT>
+                <<<1, threads>>>(dCache, blocks, cols,
+                                 dMean, dVariance, dSkewness, dKurtosis,
+                                 dMin, dMax);
+            cudaDeviceSynchronize();
+        }
 
         cudaFree(dCache);
 
@@ -596,7 +893,7 @@ namespace statistics::cuda
         cublasDestroy(handle);
     }
 
-    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result, bool standardize)
+    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result, bool standardize, bool two_pass)
     {
         if (check_result)
         {
@@ -619,7 +916,13 @@ namespace statistics::cuda
         cudaMalloc(&dMin, cols * sizeof(float));
         cudaMalloc(&dMax, cols * sizeof(float));
 
-        colum_stats<4>(dX,
+        if (two_pass)
+            colum_stats<4,true>(dX,
+                       dMean, dVariance, dSkewness, dKurtosis,
+                       dMin, dMax,
+                       rows, cols);
+        else
+            colum_stats<4,false>(dX,
                        dMean, dVariance, dSkewness, dKurtosis,
                        dMin, dMax,
                        rows, cols);

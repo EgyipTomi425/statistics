@@ -22,7 +22,7 @@ namespace statistics::cuda
 
     void centralize(const float* dX, float* dOut, const float* dMean, const float* dVar, int rows, int cols);
 
-    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result = true, bool standardize = true);
+    void pca(const float* dX, float* dOut, int rows, int cols, bool check_result = true, bool standardize = true, bool two_pass = true);
 
     void column_stats_cpu
     (
