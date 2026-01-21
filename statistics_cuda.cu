@@ -852,13 +852,13 @@ namespace statistics::cuda
         for(int i=0;i<show;i++){
             std::vector<std::pair<float,int>> abs_weights;
             for(int j=0;j<n;j++)
-                abs_weights.push_back({std::abs(hVt[i*n + j]), j});
+                abs_weights.push_back({std::abs(hVt[j*k + i]), j});
             std::sort(abs_weights.rbegin(), abs_weights.rend());
 
             std::cout << "Component " << (i+1) << ": ";
             for(int t=0;t<std::min(3,(int)abs_weights.size());t++)
                 std::cout << "Col " << abs_weights[t].second << " ("
-                          << hVt[i*n + abs_weights[t].second] << ") ";
+                          << hVt[abs_weights[t].second*k + i] << ") ";
             std::cout << "\n";
         }
 
@@ -867,7 +867,7 @@ namespace statistics::cuda
         {
             std::cout << "Comp " << (i+1) << ": ";
             for(int j=0;j<std::min(10,n);j++)
-                std::cout << std::setw(8) << hVt[i*n + j] << " ";
+                std::cout << std::setw(10) << hVt[j*k + i] << " ";
             std::cout << "\n";
         }
 
