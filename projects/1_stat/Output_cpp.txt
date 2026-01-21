@@ -38,7 +38,7 @@ Column 5 mean: 12952.5,  var: 3.1568e+06,  skew: 0.319656,  kurt: 2.53321, min: 
 Column 6 mean: 0.661934, var: 0.00596426,  skew: 0.343684,  kurt: 1.96968, min: 0.497413, max: 0.86105
 
 === PCA SVD summary ===
-Comp | Sigma      | Var %    | Cum %
+Comp | Sigma   | Var %      | Cum %
 ------------------------------------
    1 | 132.083 | 65.4141    | 65.4141
    2 | 75.5912 | 21.425     | 86.8391
