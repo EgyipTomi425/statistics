@@ -33,7 +33,8 @@ namespace statistics::cuda
         std::vector<float>& skewness,
         std::vector<float>& kurtosis,
         std::vector<float>& minv,
-        std::vector<float>& maxv
+        std::vector<float>& maxv,
+        double* elapsed_ms_cpu = nullptr
     );
 
     void centralize_cpu
@@ -43,5 +44,20 @@ namespace statistics::cuda
         int rows, int cols,
         const std::vector<float>& mean,
         const std::vector<float>* variance = nullptr
+    );
+
+    void column_stats
+    (
+        const float* dX,
+        float* dMean,
+        float* dVariance,
+        float* dSkewness,
+        float* dKurtosis,
+        float* dMin,
+        float* dMax,
+        int rows,
+        int cols,
+        int moment = 4,
+        double* elapsed_ms_gpu = nullptr
     );
 }

@@ -28,4 +28,21 @@ export namespace statistics
         int cols,
         bool check_result = false
     );
+
+    template<int MOMENT = 4>
+    void column_stats
+    (
+        const std::vector<float>& X,
+        int rows,
+        int cols,
+        std::vector<float>& mean,
+        std::vector<float>& variance,
+        std::vector<float>& skewness,
+        std::vector<float>& kurtosis,
+        std::vector<float>& minv,
+        std::vector<float>& maxv,
+        bool check_cpu,
+        double* elapsed_ms_cpu = nullptr,
+        double* elapsed_ms_gpu = nullptr
+    );
 }

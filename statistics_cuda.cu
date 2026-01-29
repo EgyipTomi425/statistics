@@ -629,8 +629,8 @@ namespace statistics::cuda
         return 0;
     }
 
-    template<int MOMENT, bool TWO_PASS = true>
-    void colum_stats
+    template<int MOMENT, bool TWO_PASS>
+    void column_stats_template
     (
         const float* dX,
         float* dMean,
@@ -640,7 +640,8 @@ namespace statistics::cuda
         float* dMin,
         float* dMax,
         int rows,
-        int cols
+        int cols,
+        double* elapsed_ms_gpu = nullptr
     )
     {
         LaunchConfig cfg = get_thread_config();
@@ -692,6 +693,10 @@ namespace statistics::cuda
 
         cudaFree(dCache);
 
+        auto stop = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> elapsed = stop - start;
+        if (elapsed_ms_gpu) *elapsed_ms_gpu = elapsed.count();
+
         std::vector<float> hMean(cols), hVar(cols), hSkew(cols), hKurt(cols), hMin(cols), hMax(cols);
 
         if constexpr(MOMENT >= 1) cudaMemcpy(hMean.data(), dMean, cols*sizeof(float), cudaMemcpyDeviceToHost);
@@ -701,9 +706,6 @@ namespace statistics::cuda
 
         cudaMemcpy(hMin.data(), dMin, cols*sizeof(float), cudaMemcpyDeviceToHost);
         cudaMemcpy(hMax.data(), dMax, cols*sizeof(float), cudaMemcpyDeviceToHost);
-
-        auto stop = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> elapsed = stop - start;
 
         std::cout << "Column_stats total GPU time: " << elapsed.count() << " ms\n";
 
@@ -877,7 +879,7 @@ namespace statistics::cuda
         cudaMemcpy(hVar.data(), dVar, cols*sizeof(float), cudaMemcpyDeviceToHost);
 
         std::cout << "\n--- Column mean and scaling (for new data) ---\n";
-        for(int j=0;j<cols;j++)
+        for(int j=0;j<std::min(cols,10);j++)
         {
             double scale = standardize ? std::sqrt(hVar[j] + 1e-8) : 1.0;
             std::cout << "Col " << j << ": mean = " << hMean[j] << ", scale = " << scale << "\n";
@@ -917,12 +919,12 @@ namespace statistics::cuda
         cudaMalloc(&dMax, cols * sizeof(float));
 
         if (two_pass)
-            colum_stats<4,true>(dX,
+            column_stats_template<4,true>(dX,
                        dMean, dVariance, dSkewness, dKurtosis,
                        dMin, dMax,
                        rows, cols);
         else
-            colum_stats<4,false>(dX,
+            column_stats_template<4,false>(dX,
                        dMean, dVariance, dSkewness, dKurtosis,
                        dMin, dMax,
                        rows, cols);
@@ -942,6 +944,40 @@ namespace statistics::cuda
         cudaFree(dMax);
     }
 
+    void column_stats
+    (
+        const float* dX,
+        float* dMean,
+        float* dVariance,
+        float* dSkewness,
+        float* dKurtosis,
+        float* dMin,
+        float* dMax,
+        int rows,
+        int cols,
+        int moment,
+        double* elapsed_ms_gpu
+    )
+    {
+        switch (moment)
+        {
+            case 1:
+                column_stats_template<1,true>(dX, dMean, dVariance, dSkewness, dKurtosis, dMin, dMax, rows, cols, elapsed_ms_gpu);
+                break;
+            case 2:
+                column_stats_template<2,true>(dX, dMean, dVariance, dSkewness, dKurtosis, dMin, dMax, rows, cols, elapsed_ms_gpu);
+                break;
+            case 3:
+                column_stats_template<3,true>(dX, dMean, dVariance, dSkewness, dKurtosis, dMin, dMax, rows, cols, elapsed_ms_gpu);
+                break;
+            case 4:
+                column_stats_template<4,true>(dX, dMean, dVariance, dSkewness, dKurtosis, dMin, dMax, rows, cols, elapsed_ms_gpu);
+                break;
+            default:
+                throw std::runtime_error("Unsupported MOMENT (only 1..4 supported)");
+        }
+    }
+
 
     void column_stats_cpu
     (
@@ -952,7 +988,8 @@ namespace statistics::cuda
         std::vector<float>& skewness,
         std::vector<float>& kurtosis,
         std::vector<float>& minv,
-        std::vector<float>& maxv
+        std::vector<float>& maxv,
+        double* elapsed_ms_cpu
     )
     {
         mean.resize(cols);
@@ -997,6 +1034,8 @@ namespace statistics::cuda
         std::chrono::duration<double, std::milli> elapsed = stop - start;
 
         std::cout << "CPU column_stats time: " << elapsed.count() << " ms\n";
+
+        if (elapsed_ms_cpu) *elapsed_ms_cpu = elapsed.count();
 
         std::cout << "\n--- The original matrix's 5 rows and 10 cols ---\n";
         for (int r = 0; r < std::min(5, rows); ++r)
