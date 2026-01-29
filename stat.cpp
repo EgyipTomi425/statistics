@@ -115,7 +115,8 @@ namespace statistics
         std::vector<float>& minv,
         std::vector<float>& maxv,
         bool check_cpu = false,
-        double* elapsed_ms_cpu,
+        double* elapsed_ms_cpu1,
+        double* elapsed_ms_cpu2,
         double* elapsed_ms_gpu
     )
     {
@@ -180,49 +181,74 @@ namespace statistics
 
         if (check_cpu)
         {
-            std::vector<float> cpu_mean, cpu_var, cpu_skew, cpu_kurt, cpu_min, cpu_max;
-
-            statistics::cuda::column_stats_cpu
-            (
-                X.data(),
-                rows,
-                cols,
-                cpu_mean,
-                cpu_var,
-                cpu_skew,
-                cpu_kurt,
-                cpu_min,
-                cpu_max,
-                elapsed_ms_cpu
-            );
-
-            std::cout << "\n--- CPU vs GPU diff (first 10 cols) ---\n";
-            for (int c = 0; c < std::min(10, cols); ++c)
+            if (elapsed_ms_cpu1)
             {
-                if constexpr (MOMENT >= 1) std::cout << "dmean=" << mean[c] - cpu_mean[c] << " ";
-                if constexpr (MOMENT >= 2) std::cout << "dvar="  << variance[c] - cpu_var[c] << " ";
-                if constexpr (MOMENT >= 3) std::cout << "dskew=" << skewness[c] - cpu_skew[c] << " ";
-                if constexpr (MOMENT >= 4) std::cout << "dkurt=" << kurtosis[c] - cpu_kurt[c] << " ";
-                std::cout << "\n";
+                std::vector<float> cpu_mean, cpu_var, cpu_skew, cpu_kurt, cpu_min, cpu_max;
+                statistics::cuda::column_stats_cpu_row_major_single
+                (
+                    X.data(),
+                    rows,
+                    cols,
+                    cpu_mean,
+                    cpu_var,
+                    cpu_skew,
+                    cpu_kurt,
+                    cpu_min,
+                    cpu_max,
+                    elapsed_ms_cpu1
+                );
+
+                std::cout << "\n--- CPU1 vs GPU diff (first 10 cols) ---\n";
+                for (int c = 0; c < std::min(10, cols); ++c)
+                {
+                    if constexpr (MOMENT >= 1) std::cout << "dmean=" << mean[c] - cpu_mean[c] << " ";
+                    if constexpr (MOMENT >= 2) std::cout << "dvar="  << variance[c] - cpu_var[c] << " ";
+                    if constexpr (MOMENT >= 3) std::cout << "dskew=" << skewness[c] - cpu_skew[c] << " ";
+                    if constexpr (MOMENT >= 4) std::cout << "dkurt=" << kurtosis[c] - cpu_kurt[c] << " ";
+                    std::cout << "\n";
+                }
+
+                if (elapsed_ms_gpu)
+                {
+                    double diff = *elapsed_ms_cpu1 - *elapsed_ms_gpu;
+                    double speedup = (*elapsed_ms_gpu != 0.0) ? (*elapsed_ms_cpu1 / *elapsed_ms_gpu) : 0.0;
+                    std::cout << "\nExecution times CPU1: "
+                              << *elapsed_ms_cpu1 << "ms, GPU: " << *elapsed_ms_gpu << "ms, "
+                              << "Diff=" << diff << "ms, Speedup=" << speedup << "x\n";
+                }
             }
 
-            if (elapsed_ms_cpu && elapsed_ms_gpu)
+            if (elapsed_ms_cpu2)
             {
-                double diff = *elapsed_ms_cpu - *elapsed_ms_gpu;
-                double speedup = (*elapsed_ms_gpu != 0.0) ? (*elapsed_ms_cpu / *elapsed_ms_gpu) : 0.0;
+                std::vector<float> cpu_mean, cpu_var, cpu_skew, cpu_kurt, cpu_min, cpu_max;
+                statistics::cuda::column_stats_cpu
+                (
+                    X.data(),
+                    rows,
+                    cols,
+                    cpu_mean,
+                    cpu_var,
+                    cpu_skew,
+                    cpu_kurt,
+                    cpu_min,
+                    cpu_max,
+                    elapsed_ms_cpu2
+                );
 
-                std::cout << "\nExecution times: "
-                          << "CPU=" << *elapsed_ms_cpu << "ms "
-                          << "GPU=" << *elapsed_ms_gpu << "ms "
-                          << "Diff=" << diff << "ms "
-                          << "Speedup=" << speedup << "x\n";
+                if (elapsed_ms_gpu)
+                {
+                    double diff = *elapsed_ms_cpu2 - *elapsed_ms_gpu;
+                    double speedup = (*elapsed_ms_gpu != 0.0) ? (*elapsed_ms_cpu2 / *elapsed_ms_gpu) : 0.0;
+                    std::cout << "\nExecution times CPU2: "
+                              << *elapsed_ms_cpu2 << "ms, GPU: " << *elapsed_ms_gpu << "ms, "
+                              << "Diff=" << diff << "ms, Speedup=" << speedup << "x\n";
+                }
             }
         }
     }
 
-    // explicit instantiation
-    template void column_stats<1>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*);
-    template void column_stats<2>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*);
-    template void column_stats<3>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*);
-    template void column_stats<4>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*);
+    template void column_stats<1>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*, double*);
+    template void column_stats<2>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*, double*);
+    template void column_stats<3>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*, double*);
+    template void column_stats<4>(const std::vector<float>&, int, int, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, std::vector<float>&, bool, double*, double*, double*);
 }

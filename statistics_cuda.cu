@@ -1062,6 +1062,89 @@ namespace statistics::cuda
         }
     }
 
+    void column_stats_cpu_row_major_single
+    (
+        const float* hX,
+        int rows, int cols,
+        std::vector<float>& mean,
+        std::vector<float>& variance,
+        std::vector<float>& skewness,
+        std::vector<float>& kurtosis,
+        std::vector<float>& minv,
+        std::vector<float>& maxv,
+        double* elapsed_ms_cpu
+    )
+    {
+        mean.resize(cols);
+        variance.resize(cols);
+        skewness.resize(cols);
+        kurtosis.resize(cols);
+        minv.resize(cols);
+        maxv.resize(cols);
+
+        std::vector<double> sum1(cols,0), sum2(cols,0), sum3(cols,0), sum4(cols,0);
+        std::vector<double> mn(cols,std::numeric_limits<double>::max());
+        std::vector<double> mx(cols,-std::numeric_limits<double>::max());
+
+        auto start = std::chrono::high_resolution_clock::now();
+
+        for(int r = 0; r < rows; ++r)
+        {
+            for(int c = 0; c < cols; ++c)
+            {
+                double x = hX[r*cols + c];
+                sum1[c] += x;
+                sum2[c] += x*x;
+                sum3[c] += x*x*x;
+                sum4[c] += x*x*x*x;
+                mn[c] = std::min(mn[c], x);
+                mx[c] = std::max(mx[c], x);
+            }
+        }
+
+        for(int c = 0; c < cols; ++c)
+        {
+            double mean_ = sum1[c]/rows;
+            double m2 = sum2[c]/rows - mean_*mean_;
+            double m3 = sum3[c]/rows - 3*mean_*m2 - mean_*mean_*mean_;
+            double m4 = sum4[c]/rows - 4*mean_*m3 - 6*mean_*mean_*m2 - mean_*mean_*mean_*mean_;
+
+            mean[c]     = mean_;
+            variance[c] = m2;
+            skewness[c] = m2>0 ? m3/pow(m2,1.5) : 0.f;
+            kurtosis[c] = m2>0 ? m4/(m2*m2) : 0.f;
+            minv[c] = mn[c];
+            maxv[c] = mx[c];
+        }
+
+        auto stop = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double,std::milli> elapsed = stop - start;
+        if(elapsed_ms_cpu) *elapsed_ms_cpu = elapsed.count();
+
+        std::cout << "CPU column_stats (row-major, single-thread) time: " << elapsed.count() << " ms\n";
+
+        std::cout << "\n--- The original matrix's 5 rows and 10 cols ---\n";
+        for(int r=0;r<std::min(5,rows);r++)
+        {
+            for(int c=0;c<std::min(10,cols);c++)
+                std::cout << hX[r*cols+c] << " ";
+            std::cout << "\n";
+        }
+
+        std::cout << "\n--- Moments of the matrix first 10 cols ---\n";
+        for(int c=0;c<std::min(10,cols);c++)
+        {
+            std::cout << "Column " << c
+                      << " mean: " << mean[c]
+                      << ", var: " << variance[c]
+                      << ", skew: " << skewness[c]
+                      << ", kurt: " << kurtosis[c]
+                      << ", min: " << minv[c]
+                      << ", max: " << maxv[c]
+                      << "\n";
+        }
+    }
+
     void centralize_cpu
     (
         const float* hX,

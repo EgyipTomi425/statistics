@@ -42,7 +42,8 @@ export namespace statistics
         std::vector<float>& minv,
         std::vector<float>& maxv,
         bool check_cpu,
-        double* elapsed_ms_cpu = nullptr,
+        double* elapsed_ms_cpu1 = nullptr,
+        double* elapsed_ms_cpu2 = nullptr,
         double* elapsed_ms_gpu = nullptr
     );
 }

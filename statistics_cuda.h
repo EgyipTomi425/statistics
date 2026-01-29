@@ -37,6 +37,19 @@ namespace statistics::cuda
         double* elapsed_ms_cpu = nullptr
     );
 
+    void column_stats_cpu_row_major_single
+    (
+        const float* hX,
+        int rows, int cols,
+        std::vector<float>& mean,
+        std::vector<float>& variance,
+        std::vector<float>& skewness,
+        std::vector<float>& kurtosis,
+        std::vector<float>& minv,
+        std::vector<float>& maxv,
+        double* elapsed_ms_cpu
+    );
+
     void centralize_cpu
     (
         const float* hX,
