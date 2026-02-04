@@ -141,18 +141,18 @@ int main()
 
     /////////////////////// ----------------------------
 
-    std::ofstream csv("column_stats_results.csv");
+    std::ofstream csv("../column_stats_results.csv");
     csv << "rows,cols,cpu_row_ms,cpu_col_ms,gpu_ms,speedup_vs_fastest_cpu\n";
 
     int rows = 16;
     int cols = 512;
-    while(rows <= (1<<20))
+    while(rows <= (1<<21))
     {
         run_test_and_write_csv(csv, rows, cols);
         rows *= 2;
     }
 
-    rows = 1<<20;
+    rows = 1<<21;
     cols = 2;
     while(cols <= 512)
     {
