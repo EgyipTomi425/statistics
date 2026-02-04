@@ -4,7 +4,7 @@
 
 ## Momentumok
 
-Welford adott online algoritmust a momentumok (és abból származtatott mennyiségek) frissítésére és összefésülésére. Ezt később Pébay általánosította, majd egy korrekciós tagot bevezetve a binomiális tétel alapján egy numerikusan stabilabb two-pass algoritmust írt le.
+Welford adott online algoritmust a momentumok (és abból származtatott mennyiségek) frissítésére és összefésülésére. Ezt később Pébay általánosította, majd egy korrekciós tagot bevezetve a binomiális tétel alapján egy numerikusan stabilabb two-pass algoritmust írt le. Ennek segítségével később PCA-t vagy mást is implementálhatunk.
 
 $$
 \mu_p = \sum_{k=0}^{p} \binom{p}{k}
